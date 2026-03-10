@@ -533,9 +533,10 @@ esac
 
 GEN_TIME=$(date '+%-I:%M %p')
 
-# ---- Generate day summary paragraph ----
-DAY_SUMMARY=$(python3 << PYEOF
-import json, os, re
+# ---- Generate day summary with Claude AI ----
+echo "  Generating AI summary..."
+DAY_SUMMARY=$(ANTHROPIC_API_KEY="$(grep ANTHROPIC_API_KEY /Users/china/codeDev/GitFeat/.env | cut -d= -f2)" python3 << PYEOF
+import json, os, re, sys
 
 cal_count = $CAL_COUNT
 email_count = $TOTAL_EMAILS
@@ -545,278 +546,116 @@ day_of_week = "$DAY_OF_WEEK"
 out_dir = "$OUT_DIR"
 rhythm_note = "$RHYTHM_NOTE"
 
-# Read calendar event names
-event_names = []
+# --- Gather all raw data for Claude ---
+
+# Calendar events (today)
+cal_today_raw = ""
 try:
-    with open(os.path.join(out_dir, "cal_today.json")) as f:
-        data = json.load(f)
-    events = data.get("events", data) if isinstance(data, dict) else data
-    if isinstance(events, dict):
-        events = events.get("events", [])
-    for e in events:
-        name = e.get("summary", "")
-        if name and "cancel" not in name.lower():
-            event_names.append(name)
+    with open(os.path.join(out_dir, "cal_today_md.txt")) as f:
+        cal_today_raw = f.read().strip()
 except: pass
 
-# Read email senders (top important ones)
-email_senders = []
-for label in ["Personal", "MentorMates"]:
-    try:
-        with open(os.path.join(out_dir, f"email_{label}.json")) as f:
-            data = json.load(f)
-        for t in data.get("threads", [])[:4]:
-            labels = t.get("labels", [])
-            skip = {"CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS"}
-            if any(l in skip for l in labels):
-                continue
-            sender = t.get("from", "")
-            m = re.match(r'^"?([^"<]+)"?\s*<', sender)
-            name = m.group(1).strip() if m else sender.split("@")[0]
-            if name and "chinat" not in name.lower() and "Daily Digest" not in t.get("subject", ""):
-                email_senders.append(name)
-    except: pass
-
-# Read task names
-task_names = []
-try:
-    with open(os.path.join(out_dir, "tasks_md.txt")) as f:
-        for line in f:
-            m = re.search(r'\*\*(.+?)\*\*', line)
-            if m: task_names.append(m.group(1))
-except: pass
-
-# Read tomorrow event names
-tomorrow_names = []
+# Calendar events (tomorrow)
+cal_tomorrow_raw = ""
 try:
     with open(os.path.join(out_dir, "cal_tomorrow_md.txt")) as f:
-        for line in f:
-            m = re.search(r'— (.+?)(?:\s*@|$)', line)
-            if m: tomorrow_names.append(m.group(1).strip())
+        cal_tomorrow_raw = f.read().strip()
 except: pass
 
-# Read browser stats
-productive = 0
-social = 0
-late_night = 0
+# Email threads with subjects and senders
+email_raw = ""
+try:
+    with open(os.path.join(out_dir, "email_md.txt")) as f:
+        email_raw = f.read().strip()
+except: pass
+
+# Active tasks from Notion
+tasks_raw = ""
+try:
+    with open(os.path.join(out_dir, "tasks_md.txt")) as f:
+        tasks_raw = f.read().strip()
+except: pass
+
+# Browser activity
+browser_raw = ""
 try:
     with open(os.path.join(out_dir, "browser.txt")) as f:
-        for line in f:
-            if "Productive" in line:
-                m = re.search(r'(\d+\.\d+)%', line)
-                if m: productive = float(m.group(1))
-            elif "Social Media" in line:
-                m = re.search(r'(\d+\.\d+)%', line)
-                if m: social = float(m.group(1))
-            elif "Late night" in line:
-                m = re.search(r'(\d+)\s+visits', line)
-                if m: late_night = int(m.group(1))
+        browser_raw = f.read().strip()
 except: pass
 
-# --- Parse events with time info ---
-# Re-read JSON to get time context
-timed_events = []
-allday_events = []
+# --- Call Claude API to write the summary ---
+import anthropic
+
+data_context = f"""
+DAY: {day_of_week}
+RHYTHM NOTE: {rhythm_note}
+CALENDAR ({cal_count} events today, {tomorrow_count} tomorrow):
+{cal_today_raw}
+
+TOMORROW:
+{cal_tomorrow_raw}
+
+EMAILS ({email_count} total):
+{email_raw}
+
+ACTIVE PROJECTS (from Notion):
+{tasks_raw}
+
+BROWSER ACTIVITY:
+{browser_raw}
+"""
+
+system_prompt = """You are writing Chinat's evening digest — a personal, emotionally warm reflection on his day. You're like a thoughtful friend who knows his schedule, his inbox, and his goals.
+
+OUTPUT FORMAT: Return a JSON array of sections. Each section has "header" (string, short uppercase label) and "body" (string, HTML with <strong> tags for highlights). Example:
+[{"header": "How Today Felt", "body": "Today was full..."}, ...]
+
+SECTIONS TO WRITE (5 total):
+1. "How Today Felt" — Opening emotional read on the day. Was it packed? Calm? Draining? Energizing? Reference the actual schedule but interpret it — don't just count events.
+2. "Conversations & Connections" — Who did Chinat talk to today? Interpret meeting titles to extract people's names (e.g. "Sophia Huard and Chinat Yu" → he met with Sophia). Look at email threads as conversations too — who reached out, what were they about? Make it about relationships, not data.
+3. "Projects & Progress" — What moved forward? Reference actual Notion tasks and work blocks. Connect to the bigger picture (MentorMates, his startup). Note the weekly rhythm and whether the day matched its intended purpose.
+4. "Looking Ahead" — What's tomorrow look like? Reassure him that the plan is in place. Suggest a stretch goal based on active projects, but frame it as optional. Make him feel like tomorrow is handled.
+5. "" (empty header) — Closing. Give him permission to rest. Make him feel safe — nothing is forgotten, nothing is slipping. He can go to bed without anxiety.
+
+RULES:
+- Write like a human, not a template. Vary sentence structure. Be warm but not saccharine.
+- Use <strong style="color:#0a0a0f;"> tags to highlight: people's names, project names, key numbers, important phrases
+- NEVER use raw calendar event titles verbatim. Interpret them: "Chinat / Douglass @ Green Coupa" → "coffee with Douglass at Green Coupa". "CS 224G - go to the prof meeting!!" → "your CS 224G class"
+- All-day events are reminders/aspirational, NOT things that necessarily happened
+- "Chinat Yu" or "Chinat" in event titles is the user himself — extract the OTHER person's name
+- Remove exclamation marks from event titles. Clean up casual shorthand.
+- Don't use exclamation marks in your writing either. Keep the tone calm and reflective.
+- For emails: describe them as conversations. "You heard back from..." or "There was a thread about..."
+- The closing should make him feel: nothing is forgotten, tomorrow is handled, he is safe to let go
+- Keep each section to 2-4 sentences. Don't over-explain.
+- Do NOT output markdown. Output HTML only (within the JSON string values)."""
+
 try:
-    with open(os.path.join(out_dir, "cal_today.json")) as f:
-        data = json.load(f)
-    raw_events = data.get("events", data) if isinstance(data, dict) else data
-    if isinstance(raw_events, dict):
-        raw_events = raw_events.get("events", [])
-    for e in raw_events:
-        name = e.get("summary", "")
-        if not name or "cancel" in name.lower():
-            continue
-        start = e.get("start", {})
-        if "date" in start and "dateTime" not in start:
-            allday_events.append(name)
-        else:
-            timed_events.append(name)
-except: pass
-
-# Helper: extract the other person's name from a meeting title
-def extract_person(title):
-    """From 'Sophia Huard and Chinat Yu' -> 'Sophia', from 'Chinat / Douglass' -> 'Douglass'"""
-    # Remove "Chinat" parts
-    cleaned = title
-    for pattern in ["Chinat Yu", "Chinat", "chinat"]:
-        cleaned = cleaned.replace(pattern, "").strip()
-    # Clean separators
-    for sep in [" and ", " / ", " & ", " @ "]:
-        parts = cleaned.split(sep)
-        cleaned = " ".join(p.strip() for p in parts if p.strip())
-    cleaned = cleaned.strip(" -/&,")
-    if cleaned:
-        return cleaned.split()[0]  # First name only
-    return None
-
-# --- Categorize events ---
-meetings = []
-classes = []
-work_blocks = []
-social_events = []
-reminders = []  # all-day items = reminders/aspirational, not things done
-
-# All-day events are reminders, not activities
-for name in allday_events:
-    reminders.append(name)
-
-for name in timed_events:
-    nl = name.lower()
-    if any(x in nl for x in ["lunch with", "dinner", "coffee"]):
-        social_events.append(name)
-    elif any(x in nl for x in ["cs ", "class", "lecture", "seminar", "prof meeting"]):
-        classes.append(name)
-    elif any(x in nl for x in ["standup", "meeting", "sync", "check-in", "discord", "call"]):
-        work_blocks.append(name)
-    elif " and " in nl or "/" in name or any(x in nl for x in ["with ", "catch up", "founders"]):
-        meetings.append(name)
-    elif any(x in nl for x in ["write", "content", "linkedin", "work", "build"]):
-        work_blocks.append(name)
-    else:
-        meetings.append(name)
-
-# Read browser history for cross-reference
-browser_topics = []
-search_terms_list = []
-try:
-    with open(os.path.join(out_dir, "browser.txt")) as f:
-        browser_text = f.read()
-    for line in browser_text.split("\n"):
-        if "Top sites" in line or "Most visited" in line:
-            continue
-        if "Searched:" in line:
-            terms = line.split("Searched:")[-1].strip().split(", ")
-            search_terms_list = [t.strip() for t in terms if t.strip()]
-        # Look for category breakdowns
-        for cat in ["Development", "AI/ML", "Social", "News", "Education"]:
-            if cat in line:
-                m = re.search(r'(\d+\.\d+)%', line)
-                if m and float(m.group(1)) > 15:
-                    browser_topics.append(cat.lower())
-except: pass
-
-# --- Build conversational summary ---
-sentences = []
-
-# Opening — emotionally honest, validating
-if cal_count >= 10:
-    if late_night > 2:
-        sentences.append(f"Today was a lot — {cal_count} things on the calendar, and you showed up for them even though you were probably running on fumes.")
-    else:
-        sentences.append(f"Today was a full day — {cal_count} things pulling at your attention, and you navigated all of it.")
-elif cal_count >= 6:
-    sentences.append(f"Today had a good rhythm. Not too rushed, not too slow — the kind of day where you can feel yourself making progress.")
-elif cal_count >= 3:
-    sentences.append(f"Today was balanced — enough structure to stay grounded, enough space to actually think. That's the sweet spot.")
-elif cal_count >= 1:
-    sentences.append(f"Today was quieter, and that's okay. Not every day needs to be packed to matter.")
-else:
-    sentences.append(f"Today was wide open. Sometimes the most productive thing is giving yourself room to breathe.")
-
-# What you actually did — describe, don't list
-# All-day events are reminders, mention gently
-if reminders:
-    sentences.append(f"You had \"{reminders[0]}\" as a reminder on the calendar — whether or not it happened, it was on your mind.")
-
-# Extract real people names from meetings
-people = []
-for m in (meetings + social_events):
-    p = extract_person(m)
-    if p and p.lower() not in ["chinat", "go", "book", "tinker"]:
-        people.append(p)
-people = list(dict.fromkeys(people))  # dedupe
-
-if people:
-    if len(people) >= 3:
-        sentences.append(f"You got to connect with {people[0]}, {people[1]}, and {people[2]} — that relational side of the day matters.")
-    elif len(people) == 2:
-        sentences.append(f"You got to spend time with {people[0]} and {people[1]}.")
-    else:
-        sentences.append(f"You caught up with {people[0]}.")
-elif len(meetings) >= 3:
-    sentences.append(f"Lots of face time today — {len(meetings)} conversations and catch-ups.")
-elif meetings:
-    sentences.append(f"You had a few things on the people side.")
-
-if classes:
-    sentences.append(f"On the academic side, {'you had ' + classes[0] if len(classes) == 1 else 'classes included ' + ' and '.join(classes[:2])}.")
-
-if work_blocks:
-    w_names = [w for w in work_blocks if "standup" not in w.lower()][:2]
-    if w_names:
-        sentences.append(f"Work-wise, you pushed on {' and '.join(w_names).lower()}.")
-
-# Cross-reference with browser to see actual focus
-if "development" in browser_topics or "ai/ml" in browser_topics:
-    if productive >= 50:
-        sentences.append("Your screen time backs it up — solid coding and research focus.")
-    else:
-        sentences.append("Browser shows a mix of building and browsing.")
-elif productive >= 50:
-    sentences.append("Screen time was focused today — well done.")
-elif productive >= 20:
-    sentences.append("Browsing was a bit scattered — some productive, some drift.")
-
-if search_terms_list:
-    terms_preview = ", ".join(search_terms_list[:3])
-    sentences.append(f"You were searching for: {terms_preview}.")
-
-# Projects — how they connect to the bigger picture
-if task_names:
-    if len(task_names) >= 2:
-        sentences.append(f"The projects moving forward right now are {task_names[0]} and {task_names[1]} — both contributing to making MentorMates real.")
-    else:
-        sentences.append(f"You're actively pushing {task_names[0]} forward.")
-
-# Weekly rhythm check
-if rhythm_note:
-    rn_lower = rhythm_note.lower()
-    # Extract just the activity, not the full note
-    activity = rn_lower.split(" — ")[0] if " — " in rn_lower else rn_lower
-    sentences.append(f"As a {day_of_week.lower()}, this was supposed to be {activity} — {'looks like you stayed on track.' if (work_blocks and 'marketing' in activity) or (not work_blocks and 'rest' in activity) else 'see how closely it matched.'}")
-
-# Late night — gentle, not scolding
-if late_night > 2:
-    sentences.append(f"You had {late_night} late-night browsing sessions — your body was probably telling you to stop before your brain did. It's okay. Tonight, try to listen earlier.")
-
-# Tomorrow — reassuring, not anxious
-if tomorrow_names:
-    top_tmrw = [n for n in tomorrow_names if not any(x in n.lower() for x in ["lunch", "break", "commute", "transit"])][:2]
-    if top_tmrw and tomorrow_count >= 6:
-        sentences.append(f"Tomorrow's full but manageable — {top_tmrw[0]} and {top_tmrw[1] if len(top_tmrw) > 1 else str(tomorrow_count) + ' other things'} are already on the calendar. You don't need to plan anything else tonight.")
-    elif top_tmrw:
-        sentences.append(f"Tomorrow you'll pick up with {top_tmrw[0]}{' and ' + top_tmrw[1] if len(top_tmrw) > 1 else ''} — it's all set up and waiting for you.")
-    else:
-        sentences.append(f"Tomorrow has {tomorrow_count} things lined up — nothing to worry about, it's all on the calendar.")
-elif tomorrow_count > 0:
-    sentences.append(f"Tomorrow has {tomorrow_count} events already scheduled. The plan is in place — you just have to show up.")
-else:
-    sentences.append("Tomorrow's wide open. No pressure, just space to do what matters most to you.")
-
-# Stretch goal — aspirational, not stressful
-if task_names:
-    sentences.append(f"If you want a stretch goal: make real progress on {task_names[0].lower()}. Even 30 focused minutes would move the needle. But that's a bonus, not a requirement.")
-elif work_blocks:
-    sentences.append(f"If you're feeling ambitious tomorrow, try to carve out one focused block before meetings start. But no pressure — you're already ahead.")
-
-# Closing — safety, reassurance, permission to rest
-dow = day_of_week.lower()
-if dow == "friday":
-    sentences.append("Everything that needed to happen this week already did. Let go of the rest and enjoy the weekend — you've earned it.")
-elif dow == "saturday":
-    sentences.append("Nothing is urgent tonight. Enjoy this evening fully, without screens or guilt. You're exactly where you need to be.")
-elif dow == "sunday":
-    sentences.append("The week ahead will take care of itself. You've rested, you've reflected, and you're ready. Sleep peacefully.")
-else:
-    if cal_count >= 8:
-        sentences.append("You did enough today. More than enough. Nothing left on this list needs you tonight — it'll still be there tomorrow, and you'll handle it better after real rest.")
-    elif task_names:
-        sentences.append(f"Everything important is tracked and nothing is falling through the cracks. {task_names[0]} will be there tomorrow. Tonight, you get to just be.")
-    else:
-        sentences.append("There's nothing you forgot, nothing slipping away. Tomorrow is handled. Tonight, just rest — you're safe to let go.")
-
-print(" ".join(sentences))
+    client = anthropic.Anthropic()
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=1500,
+        system=system_prompt,
+        messages=[{"role": "user", "content": f"Write the evening digest for this data:\n{data_context}"}]
+    )
+    result = response.content[0].text
+    # Extract JSON from response (handle markdown code blocks)
+    backtick3 = chr(96) * 3
+    if backtick3 in result:
+        result = result.split(backtick3)[1]
+        if result.startswith("json"):
+            result = result[4:]
+    sections = json.loads(result.strip())
+    print(json.dumps(sections))
+except Exception as e:
+    # Fallback: simple summary if API fails
+    sys.stderr.write(f"Claude API error: {e}\n")
+    sections = [
+        {"header": "How Today Felt", "body": f"A {day_of_week.lower()} with <strong>{cal_count} events</strong> and <strong>{email_count} emails</strong>."},
+        {"header": "Looking Ahead", "body": f"Tomorrow has <strong>{tomorrow_count} events</strong> lined up. The plan is in place."},
+        {"header": "", "body": "Nothing is forgotten. Tomorrow is handled. Rest well tonight."}
+    ]
+    print(json.dumps(sections))
 PYEOF
 )
 
@@ -857,7 +696,27 @@ cat > "$OUT_DIR/digest.md" << MARKDOWN_EOF
 
 > $RHYTHM_NOTE
 
-$DAY_SUMMARY
+$(echo "$DAY_SUMMARY" | python3 -c "
+import sys, json, re
+try:
+    sections = json.loads(sys.stdin.read().strip())
+    for sec in sections:
+        header = sec.get('header', '')
+        body = sec.get('body', '')
+        # Strip HTML tags for markdown
+        body = re.sub(r'<[^>]+>', '', body)
+        # Convert <strong> content to **bold**
+        body_raw = sec.get('body', '')
+        for m in re.finditer(r'<strong[^>]*>(.*?)</strong>', body_raw):
+            body = body.replace(m.group(1), f'**{m.group(1)}**')
+        if header:
+            print(f'### {header}')
+            print()
+        print(body)
+        print()
+except:
+    print(sys.stdin.read())
+")
 
 ## Today ($CAL_COUNT events)
 
@@ -901,7 +760,7 @@ MARKDOWN_EOF
 # ---- Build HTML Email (Daydreamers design system) ----
 # Outer wrapper with gradient background (Daydreamers style: cobalt top-right, amber bottom-left)
 cat > "$OUT_DIR/email.html" << 'HTML_HEADER'
-<div style="font-family:'DM Sans',Arial,Helvetica,sans-serif;max-width:720px;margin:0 auto;background:#f5f2ed;background-image:radial-gradient(ellipse 60% 40% at 95% 5%, rgba(28,63,220,.06) 0%, transparent 100%), radial-gradient(ellipse 50% 35% at 5% 95%, rgba(217,119,6,.04) 0%, transparent 100%);border-radius:12px;overflow:hidden;">
+<div style="font-family:'DM Sans',Arial,Helvetica,sans-serif;max-width:860px;margin:0 auto;background:#f5f2ed;background-image:radial-gradient(ellipse 60% 40% at 95% 5%, rgba(28,63,220,.06) 0%, transparent 100%), radial-gradient(ellipse 50% 35% at 5% 95%, rgba(217,119,6,.04) 0%, transparent 100%);border-radius:12px;overflow:hidden;">
 HTML_HEADER
 
 cat >> "$OUT_DIR/email.html" << HTML_HEADER2
@@ -943,8 +802,26 @@ cat >> "$OUT_DIR/email.html" << HTML_HEADER2
     </table>
 
     <!-- Day Summary -->
-    <div style="margin-bottom:36px;padding:20px 24px;background:rgba(28,63,220,.04);border-radius:10px;border-left:3px solid #4a6aff;">
-      <p style="font-size:15px;color:#0a0a0f;margin:0;line-height:1.7;">$DAY_SUMMARY</p>
+    <div style="margin-bottom:36px;padding:24px 28px;background:rgba(28,63,220,.04);border-radius:10px;">
+HTML_HEADER2
+
+# Render structured summary sections with headers and highlighted text
+echo "$DAY_SUMMARY" | python3 -c "
+import sys, json
+sections = json.loads(sys.stdin.read().strip())
+for i, sec in enumerate(sections):
+    header = sec.get('header', '')
+    body = sec.get('body', '')
+    if not body:
+        continue
+    html = ''
+    if header:
+        html += f'<div style=\"font-family:DM Mono,monospace;font-size:10px;color:#9a9088;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;{\"margin-top:18px;\" if i > 0 else \"\"}\">{header}</div>'
+    html += f'<p style=\"font-size:15px;color:#0a0a0f;margin:0 0 4px 0;line-height:1.75;\">{body}</p>'
+    print(html)
+" >> "$OUT_DIR/email.html"
+
+cat >> "$OUT_DIR/email.html" << HTML_HEADER2
     </div>
 
     <!-- Today's Schedule -->
@@ -957,7 +834,7 @@ cat >> "$OUT_DIR/email.html" << HTML_HEADER2
 
     <!-- Email -->
     <div style="margin-bottom:36px;">
-      <div style="font-family:'DM Mono',monospace;font-size:11px;color:#9a9088;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:16px;">02 — Email Highlights</div>
+      <div style="font-family:'DM Mono',monospace;font-size:11px;color:#9a9088;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:16px;">02 — Conversations</div>
       <div style="background:#ffffff;border-radius:10px;padding:24px;border:1.5px solid #e8e3da;">
         $EMAIL_HTML
       </div>
