@@ -57,7 +57,14 @@ habitect/
 │   ├── notion/                # Notion workspace integration
 │   ├── tech-agenda/           # Weekly tech meeting prep
 │   └── todo/                  # Smart task router across systems
-├── memory/                    # Persistent context across sessions
+├── knowledge/                 # Personal knowledge base (single source of truth)
+│   ├── personal/              # Identity, goals, habits, values, preferences
+│   ├── projects/              # Active projects (MentorMates, VoxForma, DayDreamers, Habitect)
+│   ├── people/                # Team, advisors, network, contacts
+│   ├── resources/             # Repos, accounts, infrastructure, tools
+│   ├── skills/                # Technical and non-technical capabilities
+│   └── immigration/           # O-1 visa process, lawyers, timeline
+├── memory/                    # Persistent agent context across sessions
 │   ├── MEMORY.md              # Core memory (always loaded)
 │   ├── cron-jobs.md           # Scheduled automations
 │   ├── team-profiles.md       # Team member details
@@ -65,6 +72,21 @@ habitect/
 ├── spec/                      # Design specs and test requirements
 └── README.md
 ```
+
+## Data Sources & Sync
+
+Habitect connects and syncs across all personal data sources:
+
+| Source | Purpose | Sync Method |
+|--------|---------|-------------|
+| **Obsidian** | Deep thinking, quarterly goals, reflections | Habitect reads goals for gameplan/digest |
+| **Notion** | Work/team notes, tasks, meetings | CLI tools (notion-management) |
+| **Apple Notes** | Personal/ad hoc capture, poems, quick mobile notes | Daily GitHub backup at 11 PM |
+| **Gmail** | Email communication | `gog` CLI (real-time) |
+| **Google Calendar** | Schedule, meetings | `gog` CLI (real-time) |
+| **Google Drive** | Documents, files | `gog` CLI (real-time) |
+| **Browser History** | Browsing patterns, productivity | browser-export CLI |
+| **GitHub** | Code, PRs, issues | `gh` CLI |
 
 ## Agents
 
