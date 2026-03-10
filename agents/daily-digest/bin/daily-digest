@@ -1,0 +1,1078 @@
+#!/bin/bash
+# Daily Evening Digest — Purpose-driven daily reflection
+# Daydreamers design system: ink/paper/cobalt/amber/green
+# Usage: daily-digest [--date YYYY-MM-DD] [--dry-run] [--skip-email] [--skip-notion] [--skip-obsidian]
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+NOTION_BIN="/Users/china/codeDev/notion-management/bin"
+BROWSER_BIN="/Users/china/.claude/skills/browser-history/bin"
+OBSIDIAN_VAULT="/Users/china/Desktop/Roam2Obsidian transition/Roam-Export-1683384736080"
+
+PERSONAL="chinatchinat123@gmail.com"
+STANFORD="chinat@stanford.edu"
+MENTORMATES_CONTACT="contact@mentormates.ai"
+
+# Parse args
+DATE=$(date +%Y-%m-%d)
+DRY_RUN=false
+SKIP_EMAIL=false
+SKIP_NOTION=false
+SKIP_OBSIDIAN=false
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --date) DATE="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=true; shift ;;
+    --skip-email) SKIP_EMAIL=true; shift ;;
+    --skip-notion) SKIP_NOTION=true; shift ;;
+    --skip-obsidian) SKIP_OBSIDIAN=true; shift ;;
+    *) shift ;;
+  esac
+done
+
+# Date formatting
+DISPLAY_DATE=$(date -j -f "%Y-%m-%d" "$DATE" "+%A, %B %e, %Y" 2>/dev/null || date -d "$DATE" "+%A, %B %e, %Y" 2>/dev/null || echo "$DATE")
+DAY_OF_WEEK=$(date -j -f "%Y-%m-%d" "$DATE" "+%A" 2>/dev/null || date -d "$DATE" "+%A" 2>/dev/null || echo "")
+TOMORROW=$(date -j -v+1d -f "%Y-%m-%d" "$DATE" "+%Y-%m-%d" 2>/dev/null || date -d "$DATE +1 day" "+%Y-%m-%d" 2>/dev/null || echo "$DATE")
+DAY_AFTER=$(date -j -v+2d -f "%Y-%m-%d" "$DATE" "+%Y-%m-%d" 2>/dev/null || date -d "$DATE +2 days" "+%Y-%m-%d" 2>/dev/null || echo "$DATE")
+TOMORROW_DISPLAY=$(date -j -f "%Y-%m-%d" "$TOMORROW" "+%A, %B %e" 2>/dev/null || echo "$TOMORROW")
+OBSIDIAN_DATE=$(date -j -f "%Y-%m-%d" "$DATE" "+%B %-dth, %Y" 2>/dev/null || echo "$DATE")
+DAY_NUM=$(date -j -f "%Y-%m-%d" "$DATE" "+%-d" 2>/dev/null || echo "0")
+case $DAY_NUM in
+  1|21|31) OBSIDIAN_DATE=$(echo "$OBSIDIAN_DATE" | sed "s/${DAY_NUM}th/${DAY_NUM}st/") ;;
+  2|22) OBSIDIAN_DATE=$(echo "$OBSIDIAN_DATE" | sed "s/${DAY_NUM}th/${DAY_NUM}nd/") ;;
+  3|23) OBSIDIAN_DATE=$(echo "$OBSIDIAN_DATE" | sed "s/${DAY_NUM}th/${DAY_NUM}rd/") ;;
+esac
+
+OUT_DIR=$(mktemp -d)
+trap "rm -rf $OUT_DIR" EXIT
+
+echo "=== Evening Digest for $DISPLAY_DATE ==="
+echo ""
+
+# ---- 1. Calendar: Today + Tomorrow ----
+echo "[1/4] Fetching calendar events..."
+gog calendar events --from "$DATE" --to "$TOMORROW" --account "$PERSONAL" --json --max 50 > "$OUT_DIR/cal_today.json" 2>/dev/null || echo '{"events":[]}' > "$OUT_DIR/cal_today.json"
+gog calendar events --from "$TOMORROW" --to "$DAY_AFTER" --account "$PERSONAL" --json --max 50 > "$OUT_DIR/cal_tomorrow.json" 2>/dev/null || echo '{"events":[]}' > "$OUT_DIR/cal_tomorrow.json"
+
+DIGEST_DATE="$DATE" DIGEST_TOMORROW="$TOMORROW" python3 << 'PYEOF' - "$OUT_DIR"
+import json, sys, os
+from datetime import datetime
+
+out_dir = sys.argv[1]
+target_date = os.environ["DIGEST_DATE"]
+tomorrow_date = os.environ["DIGEST_TOMORROW"]
+
+def parse_events(json_file, filter_date):
+    with open(json_file) as f:
+        data = json.load(f)
+    events = []
+    for e in data.get("events", []):
+        start = e.get("start", {})
+        if "dateTime" in start:
+            dt = datetime.fromisoformat(start["dateTime"])
+            if dt.strftime("%Y-%m-%d") == filter_date:
+                events.append(e)
+        elif "date" in start:
+            s = start["date"]
+            end_date = e.get("end", {}).get("date", s)
+            if s <= filter_date < end_date:
+                events.append(e)
+    return events
+
+def format_time(e):
+    start = e.get("start", {})
+    end = e.get("end", {})
+    if "dateTime" in start:
+        st = datetime.fromisoformat(start["dateTime"])
+        time_str = st.strftime("%-I:%M %p")
+        if "dateTime" in end:
+            et = datetime.fromisoformat(end["dateTime"])
+            time_str += f" – {et.strftime('%-I:%M %p')}"
+        return time_str, st.hour
+    return "All day", -1
+
+def format_attendees(e):
+    names = []
+    for a in e.get("attendees", []):
+        email = a.get("email", "")
+        if "chinat" in email.lower():
+            continue
+        name = email.split("@")[0].replace(".", " ").title()
+        names.append(name)
+    return names[:3]
+
+today = parse_events(os.path.join(out_dir, "cal_today.json"), target_date)
+tomorrow = parse_events(os.path.join(out_dir, "cal_tomorrow.json"), tomorrow_date)
+
+# --- Today MD ---
+md_lines = []
+for e in today:
+    time_str, _ = format_time(e)
+    summary = e.get("summary", "(No title)")
+    loc = e.get("location", "")
+    line = f"- **{time_str}** — {summary}"
+    if loc and not loc.startswith("http"):
+        line += f" @ {loc}"
+    md_lines.append(line)
+
+with open(os.path.join(out_dir, "cal_today_md.txt"), "w") as f:
+    f.write("\n".join(md_lines) if md_lines else "No events today.")
+
+with open(os.path.join(out_dir, "cal_today_count.txt"), "w") as f:
+    f.write(str(len(today)))
+
+# --- Tomorrow MD ---
+md_lines = []
+for e in tomorrow:
+    time_str, _ = format_time(e)
+    summary = e.get("summary", "(No title)")
+    md_lines.append(f"- **{time_str}** — {summary}")
+
+with open(os.path.join(out_dir, "cal_tomorrow_md.txt"), "w") as f:
+    f.write("\n".join(md_lines) if md_lines else "No events tomorrow.")
+
+with open(os.path.join(out_dir, "cal_tomorrow_count.txt"), "w") as f:
+    f.write(str(len(tomorrow)))
+
+# --- Today HTML ---
+html_rows = []
+for e in today:
+    time_str, hour = format_time(e)
+    summary = e.get("summary", "(No title)")
+    loc = e.get("location", "")
+    attendees = format_attendees(e)
+    # Color-code by time of day
+    if hour < 0:
+        dot_color = "#9a9088"  # dust — all day
+    elif hour < 12:
+        dot_color = "#1c3fdc"  # cobalt — morning
+    elif hour < 17:
+        dot_color = "#d97706"  # amber — afternoon
+    else:
+        dot_color = "#16a34a"  # green — evening
+
+    row = f'''<tr>
+      <td style="padding:10px 12px 10px 0;vertical-align:top;width:12px;">
+        <div style="width:8px;height:8px;border-radius:50%;background:{dot_color};margin-top:6px;"></div>
+      </td>
+      <td style="padding:10px 0;font-family:'DM Sans',Arial,sans-serif;">
+        <span style="font-size:12px;color:{dot_color};font-weight:500;letter-spacing:0.3px;">{time_str}</span><br>
+        <span style="font-size:14px;color:#0a0a0f;font-weight:500;">{summary}</span>'''
+    if loc and not loc.startswith("http"):
+        row += f'<br><span style="font-size:12px;color:#9a9088;">📍 {loc}</span>'
+    if attendees:
+        row += f'<br><span style="font-size:12px;color:#9a9088;">with {", ".join(attendees)}</span>'
+    row += '</td></tr>'
+    html_rows.append(row)
+
+with open(os.path.join(out_dir, "cal_today_html.txt"), "w") as f:
+    if html_rows:
+        f.write(f'<table style="width:100%;border-collapse:collapse;">{"".join(html_rows)}</table>')
+    else:
+        f.write('<p style="color:#9a9088;font-style:italic;">No events today.</p>')
+
+# --- Tomorrow HTML ---
+html_rows = []
+for e in tomorrow:
+    time_str, hour = format_time(e)
+    summary = e.get("summary", "(No title)")
+    dot_color = "#1c3fdc" if hour < 12 else "#d97706" if hour < 17 else "#16a34a" if hour >= 0 else "#9a9088"
+    html_rows.append(f'''<tr>
+      <td style="padding:8px 10px 8px 0;vertical-align:top;width:12px;">
+        <div style="width:6px;height:6px;border-radius:50%;background:{dot_color};margin-top:6px;"></div>
+      </td>
+      <td style="padding:8px 0;font-family:'DM Sans',Arial,sans-serif;">
+        <span style="font-size:12px;color:#9a9088;">{time_str}</span>
+        <span style="font-size:13px;color:#0a0a0f;margin-left:4px;">{summary}</span>
+      </td>
+    </tr>''')
+
+with open(os.path.join(out_dir, "cal_tomorrow_html.txt"), "w") as f:
+    if html_rows:
+        f.write(f'<table style="width:100%;border-collapse:collapse;">{"".join(html_rows)}</table>')
+    else:
+        f.write('<p style="color:#9a9088;font-style:italic;">No events tomorrow.</p>')
+
+PYEOF
+
+CAL_COUNT=$(cat "$OUT_DIR/cal_today_count.txt")
+TOMORROW_COUNT=$(cat "$OUT_DIR/cal_tomorrow_count.txt")
+echo "  Today: $CAL_COUNT events, Tomorrow: $TOMORROW_COUNT events"
+
+# ---- 2. Browser History ----
+echo "[2/4] Fetching browser history..."
+"$BROWSER_BIN/browser-export" recap --days 1 > "$OUT_DIR/browser.txt" 2>/dev/null || echo "No browser data" > "$OUT_DIR/browser.txt"
+"$BROWSER_BIN/browser-export" searches --days 1 --limit 10 > "$OUT_DIR/searches.txt" 2>/dev/null || echo "" > "$OUT_DIR/searches.txt"
+
+python3 << 'PYEOF' - "$OUT_DIR/browser.txt" "$OUT_DIR/searches.txt" "$OUT_DIR/browser_md.txt" "$OUT_DIR/browser_html.txt"
+import sys, re
+
+browser_file, searches_file, md_out, html_out = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+
+with open(browser_file) as f:
+    browser = f.read()
+with open(searches_file) as f:
+    searches = f.read()
+
+total_visits = "0"
+categories = []
+hygiene = {}
+for line in browser.split("\n"):
+    if "Total page visits:" in line:
+        total_visits = line.split(":")[-1].strip()
+    elif re.match(r'\s+\S+.*\d+\s+\(', line):
+        m = re.match(r'\s+(.+?)\s{2,}(\d+)\s+\((\d+\.\d+)%\)', line)
+        if m:
+            categories.append((m.group(1), m.group(2), m.group(3)))
+    elif "Productive" in line:
+        m = re.search(r'(\d+\.\d+)%', line)
+        if m: hygiene["productive"] = m.group(1)
+    elif "Social Media" in line:
+        m = re.search(r'(\d+\.\d+)%', line)
+        if m: hygiene["social"] = m.group(1)
+    elif "Late night" in line:
+        m = re.search(r'(\d+)\s+visits', line)
+        if m: hygiene["latenight"] = m.group(1)
+
+search_terms = []
+for line in searches.split("\n"):
+    m = re.match(r'\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+(.+)', line)
+    if m:
+        search_terms.append(m.group(1).strip())
+
+# Markdown
+md = f"{total_visits} page visits"
+if categories:
+    top = categories[0]
+    md += f" — mostly {top[0].lower()} ({top[2]}%)"
+prod = hygiene.get("productive", "?")
+social = hygiene.get("social", "?")
+late = hygiene.get("latenight", "0")
+md += f"\n- Productive: {prod}% | Social: {social}%"
+if int(late) > 0:
+    md += f" | Late night: {late} visits"
+if search_terms:
+    md += f"\n- Searched: {', '.join(search_terms[:4])}"
+
+with open(md_out, "w") as f:
+    f.write(md)
+
+# HTML — compact hygiene card
+prod_pct = float(hygiene.get("productive", "0"))
+social_pct = float(hygiene.get("social", "0"))
+late_count = int(hygiene.get("latenight", "0"))
+
+# Determine overall signal
+if prod_pct >= 50:
+    signal_color = "#16a34a"; signal_label = "Focused day"
+elif prod_pct >= 20:
+    signal_color = "#d97706"; signal_label = "Mixed day"
+else:
+    signal_color = "#9a9088"; signal_label = "Light day"
+
+html = f'''<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+  <div style="font-size:28px;font-weight:700;color:#0a0a0f;font-family:'DM Serif Display',Georgia,serif;">{total_visits}</div>
+  <div>
+    <div style="font-size:13px;color:#0a0a0f;">page visits</div>
+    <div style="font-size:12px;color:{signal_color};font-weight:500;">{signal_label}</div>
+  </div>
+</div>'''
+
+# Category bars
+if categories:
+    html += '<div style="margin-bottom:10px;">'
+    for cat, count, pct in categories[:3]:
+        bar_w = min(float(pct), 100)
+        html += f'''<div style="margin-bottom:4px;display:flex;align-items:center;gap:8px;">
+          <span style="font-size:12px;color:#9a9088;width:120px;text-align:right;">{cat}</span>
+          <div style="flex:1;height:5px;background:#e8e3da;border-radius:3px;overflow:hidden;">
+            <div style="height:100%;width:{bar_w}%;background:#1c3fdc;border-radius:3px;"></div>
+          </div>
+          <span style="font-size:11px;color:#9a9088;width:30px;">{pct}%</span>
+        </div>'''
+    html += '</div>'
+
+# Hygiene signals
+signals = []
+if social_pct <= 5:
+    signals.append(f'<span style="color:#16a34a;">Social {social_pct}%</span>')
+elif social_pct > 20:
+    signals.append(f'<span style="color:#d97706;">Social {social_pct}%</span>')
+if late_count > 2:
+    signals.append(f'<span style="color:#d97706;">Late night: {late_count} visits</span>')
+
+if signals:
+    html += f'<div style="font-size:12px;color:#9a9088;">{" · ".join(signals)}</div>'
+
+if search_terms:
+    html += f'<div style="font-size:12px;color:#9a9088;margin-top:8px;">Searched: {", ".join(search_terms[:4])}</div>'
+
+with open(html_out, "w") as f:
+    f.write(html)
+PYEOF
+echo "  Done"
+
+# ---- 3. Gmail highlights ----
+echo "[3/4] Fetching email highlights..."
+# Use date-based query so --date flag works for past dates
+GMAIL_QUERY="after:${DATE} before:${TOMORROW}"
+for acct_pair in "Personal:$PERSONAL" "MentorMates:$MENTORMATES_CONTACT"; do
+  label="${acct_pair%%:*}"
+  acct="${acct_pair##*:}"
+  gog gmail search "$GMAIL_QUERY" --account "$acct" --json 2>/dev/null > "$OUT_DIR/email_${label}.json" || echo '{"threads":[]}' > "$OUT_DIR/email_${label}.json"
+done
+
+python3 << 'PYEOF' - "$OUT_DIR" "$OUT_DIR/email_md.txt" "$OUT_DIR/email_html.txt" "$OUT_DIR/email_count.txt"
+import json, sys, os, re
+
+out_dir, md_out, html_out, count_out = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+
+accounts = [
+    ("Personal", "email_Personal.json"),
+    ("MentorMates", "email_MentorMates.json"),
+]
+
+md_sections = []
+html_sections = []
+total = 0
+
+for label, filename in accounts:
+    filepath = os.path.join(out_dir, filename)
+    try:
+        with open(filepath) as f:
+            data = json.load(f)
+    except:
+        data = {"threads": []}
+
+    threads = data.get("threads", [])
+    total += len(threads)
+    if not threads:
+        continue
+
+    # Filter noise
+    important = []
+    for t in threads:
+        labels = t.get("labels", [])
+        skip = {"CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS"}
+        if any(l in skip for l in labels) and len(threads) > 3:
+            continue
+        # Skip self-sent
+        sender = t.get("from", "")
+        if "chinatchinat123" in sender and "Daily Digest" in t.get("subject", ""):
+            continue
+        important.append(t)
+
+    if not important:
+        important = threads[:3]
+    else:
+        important = important[:6]
+
+    # Markdown
+    md_lines = [f"**{label}** ({len(threads)})"]
+    for t in important:
+        sender = t.get("from", "Unknown")
+        subject = t.get("subject", "(no subject)")
+        name_match = re.match(r'^"?([^"<]+)"?\s*<', sender)
+        sender = name_match.group(1).strip() if name_match else (sender.split("@")[0] if "@" in sender else sender)
+        if len(subject) > 65:
+            subject = subject[:62] + "..."
+        unread = "UNREAD" in t.get("labels", [])
+        bold = "**" if unread else ""
+        md_lines.append(f"  - {bold}{sender} — {subject}{bold}")
+    md_sections.append("\n".join(md_lines))
+
+    # HTML
+    html_rows = []
+    for t in important:
+        sender = t.get("from", "Unknown")
+        subject = t.get("subject", "(no subject)")
+        name_match = re.match(r'^"?([^"<]+)"?\s*<', sender)
+        sender = name_match.group(1).strip() if name_match else (sender.split("@")[0] if "@" in sender else sender)
+        if len(subject) > 75:
+            subject = subject[:72] + "..."
+        unread = "UNREAD" in t.get("labels", [])
+        weight = "600" if unread else "400"
+        dot = '<div style="width:6px;height:6px;border-radius:50%;background:#1c3fdc;margin-top:7px;"></div>' if unread else '<div style="width:6px;height:6px;margin-top:7px;"></div>'
+
+        html_rows.append(f'''<tr>
+          <td style="padding:8px 10px 8px 0;vertical-align:top;width:12px;">{dot}</td>
+          <td style="padding:8px 0;font-family:'DM Sans',Arial,sans-serif;">
+            <span style="font-weight:{weight};color:#0a0a0f;font-size:13px;">{sender}</span>
+            <span style="color:#d0c9be;"> — </span>
+            <span style="color:#0a0a0f;font-size:13px;">{subject}</span>
+          </td>
+        </tr>''')
+
+    if html_rows:
+        html_sections.append(f'''<div style="margin-bottom:12px;">
+          <div style="font-size:11px;color:#9a9088;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;font-family:'DM Mono',monospace;">{label}</div>
+          <table style="width:100%;border-collapse:collapse;">{"".join(html_rows)}</table>
+        </div>''')
+
+with open(md_out, "w") as f:
+    f.write("\n\n".join(md_sections) if md_sections else "No new emails today.")
+
+with open(html_out, "w") as f:
+    f.write("".join(html_sections) if html_sections else '<p style="color:#9a9088;">No new emails.</p>')
+
+with open(count_out, "w") as f:
+    f.write(str(total))
+PYEOF
+
+TOTAL_EMAILS=$(cat "$OUT_DIR/email_count.txt")
+echo "  Found $TOTAL_EMAILS emails"
+
+# ---- 4. Notion tasks ----
+echo "[4/4] Fetching Notion tasks..."
+"$NOTION_BIN/notion-db-query" 255ab088-064e-8095-b931-c005ceaafbbe --filter-json '{"property":"Status","status":{"equals":"In progress"}}' > "$OUT_DIR/notion-raw.txt" 2>/dev/null || echo "" > "$OUT_DIR/notion-raw.txt"
+
+python3 << 'PYEOF' - "$OUT_DIR/notion-raw.txt" "$OUT_DIR/tasks_md.txt" "$OUT_DIR/tasks_html.txt" "$OUT_DIR/tasks_count.txt"
+import sys, re
+
+raw_file, md_out, html_out, count_out = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+
+with open(raw_file) as f:
+    raw = f.read()
+
+tasks = []
+current = {}
+for line in raw.split("\n"):
+    line = line.rstrip()
+    if line.startswith("📄 "):
+        if current and "name" in current:
+            tasks.append(current)
+        current = {"name": line[2:].strip()}
+    elif "Assignee:" in line:
+        val = line.split("Assignee:")[-1].strip()
+        val = val.replace("jefferyzhouehs@gmail.com", "Jeffery")
+        current["assignee"] = val
+    elif "Due date:" in line:
+        current["due"] = line.split("Due date:")[-1].strip()
+    elif "Priority:" in line:
+        current["priority"] = line.split("Priority:")[-1].strip()
+if current and "name" in current:
+    tasks.append(current)
+
+# Markdown
+md_lines = []
+for t in tasks:
+    priority = t.get("priority", "")
+    icon = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}.get(priority, "⚪")
+    name = t.get("name", "")
+    assignee = t.get("assignee", "")
+    due = t.get("due", "")
+    meta = []
+    if assignee: meta.append(assignee)
+    if due: meta.append(f"due {due}")
+    line = f"- {icon} **{name}**"
+    if meta: line += f"  ({', '.join(meta)})"
+    md_lines.append(line)
+
+with open(md_out, "w") as f:
+    f.write("\n".join(md_lines) if md_lines else "No active tasks.")
+
+# HTML
+html_rows = []
+for t in tasks:
+    priority = t.get("priority", "")
+    p_color = {"High": "#dc2626", "Medium": "#d97706", "Low": "#16a34a"}.get(priority, "#d0c9be")
+    name = t.get("name", "")
+    assignee = t.get("assignee", "")
+    due = t.get("due", "")
+    html_rows.append(f'''<tr>
+      <td style="padding:10px 10px 10px 0;vertical-align:top;width:12px;">
+        <div style="width:8px;height:8px;border-radius:50%;background:{p_color};margin-top:5px;"></div>
+      </td>
+      <td style="padding:10px 0;font-family:'DM Sans',Arial,sans-serif;">
+        <span style="font-size:13px;font-weight:500;color:#0a0a0f;">{name}</span>
+        <br><span style="font-size:12px;color:#9a9088;">{assignee}{(" · " + due) if due else ""}</span>
+      </td>
+    </tr>''')
+
+with open(html_out, "w") as f:
+    if html_rows:
+        f.write(f'<table style="width:100%;border-collapse:collapse;">{"".join(html_rows)}</table>')
+    else:
+        f.write('<p style="color:#9a9088;font-style:italic;">No active tasks.</p>')
+
+with open(count_out, "w") as f:
+    f.write(str(len(tasks)))
+PYEOF
+
+TASKS_COUNT=$(cat "$OUT_DIR/tasks_count.txt")
+echo "  Found $TASKS_COUNT active tasks"
+
+echo ""
+echo "=== Generating outputs ==="
+
+# Read all parsed content
+CAL_TODAY_MD=$(cat "$OUT_DIR/cal_today_md.txt")
+CAL_TODAY_HTML=$(cat "$OUT_DIR/cal_today_html.txt")
+CAL_TOMORROW_MD=$(cat "$OUT_DIR/cal_tomorrow_md.txt")
+CAL_TOMORROW_HTML=$(cat "$OUT_DIR/cal_tomorrow_html.txt")
+EMAIL_MD=$(cat "$OUT_DIR/email_md.txt")
+EMAIL_HTML=$(cat "$OUT_DIR/email_html.txt")
+BROWSER_MD=$(cat "$OUT_DIR/browser_md.txt")
+BROWSER_HTML=$(cat "$OUT_DIR/browser_html.txt")
+TASKS_MD=$(cat "$OUT_DIR/tasks_md.txt")
+TASKS_HTML=$(cat "$OUT_DIR/tasks_html.txt")
+
+# ---- Weekly rhythm note ----
+case $DAY_OF_WEEK in
+  Monday)    RHYTHM_NOTE="Planning day — set weekly highlight, review 3-project limit" ;;
+  Tuesday)   RHYTHM_NOTE="Marketing meeting + outreach day" ;;
+  Wednesday) RHYTHM_NOTE="Deep build day — minimal meetings" ;;
+  Thursday)  RHYTHM_NOTE="Workshops + partnerships + teaching" ;;
+  Friday)    RHYTHM_NOTE="Ship day — push code, publish content, close loops" ;;
+  Saturday)  RHYTHM_NOTE="Flexible — hackathons, social, exploration" ;;
+  Sunday)    RHYTHM_NOTE="REST — church, Bible study, reflection. No work." ;;
+  *)         RHYTHM_NOTE="" ;;
+esac
+
+GEN_TIME=$(date '+%-I:%M %p')
+
+# ---- Generate day summary paragraph ----
+DAY_SUMMARY=$(python3 << PYEOF
+import json, os, re
+
+cal_count = $CAL_COUNT
+email_count = $TOTAL_EMAILS
+tasks_count = $TASKS_COUNT
+tomorrow_count = $TOMORROW_COUNT
+day_of_week = "$DAY_OF_WEEK"
+out_dir = "$OUT_DIR"
+rhythm_note = "$RHYTHM_NOTE"
+
+# Read calendar event names
+event_names = []
+try:
+    with open(os.path.join(out_dir, "cal_today.json")) as f:
+        data = json.load(f)
+    events = data.get("events", data) if isinstance(data, dict) else data
+    if isinstance(events, dict):
+        events = events.get("events", [])
+    for e in events:
+        name = e.get("summary", "")
+        if name and "cancel" not in name.lower():
+            event_names.append(name)
+except: pass
+
+# Read email senders (top important ones)
+email_senders = []
+for label in ["Personal", "MentorMates"]:
+    try:
+        with open(os.path.join(out_dir, f"email_{label}.json")) as f:
+            data = json.load(f)
+        for t in data.get("threads", [])[:4]:
+            labels = t.get("labels", [])
+            skip = {"CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS"}
+            if any(l in skip for l in labels):
+                continue
+            sender = t.get("from", "")
+            m = re.match(r'^"?([^"<]+)"?\s*<', sender)
+            name = m.group(1).strip() if m else sender.split("@")[0]
+            if name and "chinat" not in name.lower() and "Daily Digest" not in t.get("subject", ""):
+                email_senders.append(name)
+    except: pass
+
+# Read task names
+task_names = []
+try:
+    with open(os.path.join(out_dir, "tasks_md.txt")) as f:
+        for line in f:
+            m = re.search(r'\*\*(.+?)\*\*', line)
+            if m: task_names.append(m.group(1))
+except: pass
+
+# Read tomorrow event names
+tomorrow_names = []
+try:
+    with open(os.path.join(out_dir, "cal_tomorrow_md.txt")) as f:
+        for line in f:
+            m = re.search(r'— (.+?)(?:\s*@|$)', line)
+            if m: tomorrow_names.append(m.group(1).strip())
+except: pass
+
+# Read browser stats
+productive = 0
+social = 0
+late_night = 0
+try:
+    with open(os.path.join(out_dir, "browser.txt")) as f:
+        for line in f:
+            if "Productive" in line:
+                m = re.search(r'(\d+\.\d+)%', line)
+                if m: productive = float(m.group(1))
+            elif "Social Media" in line:
+                m = re.search(r'(\d+\.\d+)%', line)
+                if m: social = float(m.group(1))
+            elif "Late night" in line:
+                m = re.search(r'(\d+)\s+visits', line)
+                if m: late_night = int(m.group(1))
+except: pass
+
+# --- Parse events with time info ---
+# Re-read JSON to get time context
+timed_events = []
+allday_events = []
+try:
+    with open(os.path.join(out_dir, "cal_today.json")) as f:
+        data = json.load(f)
+    raw_events = data.get("events", data) if isinstance(data, dict) else data
+    if isinstance(raw_events, dict):
+        raw_events = raw_events.get("events", [])
+    for e in raw_events:
+        name = e.get("summary", "")
+        if not name or "cancel" in name.lower():
+            continue
+        start = e.get("start", {})
+        if "date" in start and "dateTime" not in start:
+            allday_events.append(name)
+        else:
+            timed_events.append(name)
+except: pass
+
+# Helper: extract the other person's name from a meeting title
+def extract_person(title):
+    """From 'Sophia Huard and Chinat Yu' -> 'Sophia', from 'Chinat / Douglass' -> 'Douglass'"""
+    # Remove "Chinat" parts
+    cleaned = title
+    for pattern in ["Chinat Yu", "Chinat", "chinat"]:
+        cleaned = cleaned.replace(pattern, "").strip()
+    # Clean separators
+    for sep in [" and ", " / ", " & ", " @ "]:
+        parts = cleaned.split(sep)
+        cleaned = " ".join(p.strip() for p in parts if p.strip())
+    cleaned = cleaned.strip(" -/&,")
+    if cleaned:
+        return cleaned.split()[0]  # First name only
+    return None
+
+# --- Categorize events ---
+meetings = []
+classes = []
+work_blocks = []
+social_events = []
+reminders = []  # all-day items = reminders/aspirational, not things done
+
+# All-day events are reminders, not activities
+for name in allday_events:
+    reminders.append(name)
+
+for name in timed_events:
+    nl = name.lower()
+    if any(x in nl for x in ["lunch with", "dinner", "coffee"]):
+        social_events.append(name)
+    elif any(x in nl for x in ["cs ", "class", "lecture", "seminar", "prof meeting"]):
+        classes.append(name)
+    elif any(x in nl for x in ["standup", "meeting", "sync", "check-in", "discord", "call"]):
+        work_blocks.append(name)
+    elif " and " in nl or "/" in name or any(x in nl for x in ["with ", "catch up", "founders"]):
+        meetings.append(name)
+    elif any(x in nl for x in ["write", "content", "linkedin", "work", "build"]):
+        work_blocks.append(name)
+    else:
+        meetings.append(name)
+
+# Read browser history for cross-reference
+browser_topics = []
+search_terms_list = []
+try:
+    with open(os.path.join(out_dir, "browser.txt")) as f:
+        browser_text = f.read()
+    for line in browser_text.split("\n"):
+        if "Top sites" in line or "Most visited" in line:
+            continue
+        if "Searched:" in line:
+            terms = line.split("Searched:")[-1].strip().split(", ")
+            search_terms_list = [t.strip() for t in terms if t.strip()]
+        # Look for category breakdowns
+        for cat in ["Development", "AI/ML", "Social", "News", "Education"]:
+            if cat in line:
+                m = re.search(r'(\d+\.\d+)%', line)
+                if m and float(m.group(1)) > 15:
+                    browser_topics.append(cat.lower())
+except: pass
+
+# --- Build conversational summary ---
+sentences = []
+
+# Opening — emotionally honest, validating
+if cal_count >= 10:
+    if late_night > 2:
+        sentences.append(f"Today was a lot — {cal_count} things on the calendar, and you showed up for them even though you were probably running on fumes.")
+    else:
+        sentences.append(f"Today was a full day — {cal_count} things pulling at your attention, and you navigated all of it.")
+elif cal_count >= 6:
+    sentences.append(f"Today had a good rhythm. Not too rushed, not too slow — the kind of day where you can feel yourself making progress.")
+elif cal_count >= 3:
+    sentences.append(f"Today was balanced — enough structure to stay grounded, enough space to actually think. That's the sweet spot.")
+elif cal_count >= 1:
+    sentences.append(f"Today was quieter, and that's okay. Not every day needs to be packed to matter.")
+else:
+    sentences.append(f"Today was wide open. Sometimes the most productive thing is giving yourself room to breathe.")
+
+# What you actually did — describe, don't list
+# All-day events are reminders, mention gently
+if reminders:
+    sentences.append(f"You had \"{reminders[0]}\" as a reminder on the calendar — whether or not it happened, it was on your mind.")
+
+# Extract real people names from meetings
+people = []
+for m in (meetings + social_events):
+    p = extract_person(m)
+    if p and p.lower() not in ["chinat", "go", "book", "tinker"]:
+        people.append(p)
+people = list(dict.fromkeys(people))  # dedupe
+
+if people:
+    if len(people) >= 3:
+        sentences.append(f"You got to connect with {people[0]}, {people[1]}, and {people[2]} — that relational side of the day matters.")
+    elif len(people) == 2:
+        sentences.append(f"You got to spend time with {people[0]} and {people[1]}.")
+    else:
+        sentences.append(f"You caught up with {people[0]}.")
+elif len(meetings) >= 3:
+    sentences.append(f"Lots of face time today — {len(meetings)} conversations and catch-ups.")
+elif meetings:
+    sentences.append(f"You had a few things on the people side.")
+
+if classes:
+    sentences.append(f"On the academic side, {'you had ' + classes[0] if len(classes) == 1 else 'classes included ' + ' and '.join(classes[:2])}.")
+
+if work_blocks:
+    w_names = [w for w in work_blocks if "standup" not in w.lower()][:2]
+    if w_names:
+        sentences.append(f"Work-wise, you pushed on {' and '.join(w_names).lower()}.")
+
+# Cross-reference with browser to see actual focus
+if "development" in browser_topics or "ai/ml" in browser_topics:
+    if productive >= 50:
+        sentences.append("Your screen time backs it up — solid coding and research focus.")
+    else:
+        sentences.append("Browser shows a mix of building and browsing.")
+elif productive >= 50:
+    sentences.append("Screen time was focused today — well done.")
+elif productive >= 20:
+    sentences.append("Browsing was a bit scattered — some productive, some drift.")
+
+if search_terms_list:
+    terms_preview = ", ".join(search_terms_list[:3])
+    sentences.append(f"You were searching for: {terms_preview}.")
+
+# Projects — how they connect to the bigger picture
+if task_names:
+    if len(task_names) >= 2:
+        sentences.append(f"The projects moving forward right now are {task_names[0]} and {task_names[1]} — both contributing to making MentorMates real.")
+    else:
+        sentences.append(f"You're actively pushing {task_names[0]} forward.")
+
+# Weekly rhythm check
+if rhythm_note:
+    rn_lower = rhythm_note.lower()
+    # Extract just the activity, not the full note
+    activity = rn_lower.split(" — ")[0] if " — " in rn_lower else rn_lower
+    sentences.append(f"As a {day_of_week.lower()}, this was supposed to be {activity} — {'looks like you stayed on track.' if (work_blocks and 'marketing' in activity) or (not work_blocks and 'rest' in activity) else 'see how closely it matched.'}")
+
+# Late night — gentle, not scolding
+if late_night > 2:
+    sentences.append(f"You had {late_night} late-night browsing sessions — your body was probably telling you to stop before your brain did. It's okay. Tonight, try to listen earlier.")
+
+# Tomorrow — reassuring, not anxious
+if tomorrow_names:
+    top_tmrw = [n for n in tomorrow_names if not any(x in n.lower() for x in ["lunch", "break", "commute", "transit"])][:2]
+    if top_tmrw and tomorrow_count >= 6:
+        sentences.append(f"Tomorrow's full but manageable — {top_tmrw[0]} and {top_tmrw[1] if len(top_tmrw) > 1 else str(tomorrow_count) + ' other things'} are already on the calendar. You don't need to plan anything else tonight.")
+    elif top_tmrw:
+        sentences.append(f"Tomorrow you'll pick up with {top_tmrw[0]}{' and ' + top_tmrw[1] if len(top_tmrw) > 1 else ''} — it's all set up and waiting for you.")
+    else:
+        sentences.append(f"Tomorrow has {tomorrow_count} things lined up — nothing to worry about, it's all on the calendar.")
+elif tomorrow_count > 0:
+    sentences.append(f"Tomorrow has {tomorrow_count} events already scheduled. The plan is in place — you just have to show up.")
+else:
+    sentences.append("Tomorrow's wide open. No pressure, just space to do what matters most to you.")
+
+# Stretch goal — aspirational, not stressful
+if task_names:
+    sentences.append(f"If you want a stretch goal: make real progress on {task_names[0].lower()}. Even 30 focused minutes would move the needle. But that's a bonus, not a requirement.")
+elif work_blocks:
+    sentences.append(f"If you're feeling ambitious tomorrow, try to carve out one focused block before meetings start. But no pressure — you're already ahead.")
+
+# Closing — safety, reassurance, permission to rest
+dow = day_of_week.lower()
+if dow == "friday":
+    sentences.append("Everything that needed to happen this week already did. Let go of the rest and enjoy the weekend — you've earned it.")
+elif dow == "saturday":
+    sentences.append("Nothing is urgent tonight. Enjoy this evening fully, without screens or guilt. You're exactly where you need to be.")
+elif dow == "sunday":
+    sentences.append("The week ahead will take care of itself. You've rested, you've reflected, and you're ready. Sleep peacefully.")
+else:
+    if cal_count >= 8:
+        sentences.append("You did enough today. More than enough. Nothing left on this list needs you tonight — it'll still be there tomorrow, and you'll handle it better after real rest.")
+    elif task_names:
+        sentences.append(f"Everything important is tracked and nothing is falling through the cracks. {task_names[0]} will be there tomorrow. Tonight, you get to just be.")
+    else:
+        sentences.append("There's nothing you forgot, nothing slipping away. Tomorrow is handled. Tonight, just rest — you're safe to let go.")
+
+print(" ".join(sentences))
+PYEOF
+)
+
+# ---- Pick daily prayer/verse (rotates by day of year) ----
+DAY_OF_YEAR=$(date -j -f "%Y-%m-%d" "$DATE" "+%j" 2>/dev/null || echo "1")
+PRAYER_DATA=$(DAY_OF_YEAR="$DAY_OF_YEAR" python3 << 'PYEOF'
+import os
+day = int(os.environ.get("DAY_OF_YEAR", "1"))
+verses = [
+    ("Psalm 23:1-3", "The Lord is my shepherd; I shall not want. He makes me lie down in green pastures. He leads me beside still waters. He restores my soul.", "Lord, thank you for restoring my soul today. Where I felt scattered, you brought peace. Where I felt behind, you reminded me that I am exactly where I need to be. Help me to rest tonight trusting that you hold tomorrow."),
+    ("Proverbs 16:3", "Commit to the Lord whatever you do, and he will establish your plans.", "Father, I commit my work to you — MentorMates, Daydreamers, every conversation and every line of code. Establish the plans that align with your will, and gently close the doors on the ones that don't. Give me wisdom to know the difference."),
+    ("Isaiah 40:31", "But those who hope in the Lord will renew their strength. They will soar on wings like eagles; they will run and not grow weary, they will walk and not be faint.", "Lord, renew my strength tonight. The day was full, and tomorrow will be too. I choose to hope in you rather than hustle harder. Teach me that rest is worship, and that you are the source of all energy I need."),
+    ("Philippians 4:6-7", "Do not be anxious about anything, but in every situation, by prayer and petition, with thanksgiving, present your requests to God. And the peace of God, which transcends all understanding, will guard your hearts and minds.", "Father, I lay down every anxious thought — about deadlines, about whether I'm doing enough, about the future. I thank you for today. Guard my heart and mind tonight with your peace that passes understanding."),
+    ("Colossians 3:23-24", "Whatever you do, work at it with all your heart, as working for the Lord, not for human masters. It is the Lord Christ you are serving.", "Lord, thank you for the reminder that my work is ultimately for you. Not for metrics, not for validation, not for comparison. Help me to build with excellence and purpose, knowing that I serve you in every meeting, every workshop, every act of mentorship."),
+    ("Jeremiah 29:11", "For I know the plans I have for you, declares the Lord, plans to prosper you and not to harm you, plans to give you hope and a future.", "Father, when I feel uncertain about the path ahead — the venture, the visa, the relationships — anchor me in this promise. You have plans for me. I don't need to figure it all out tonight. I just need to be faithful with today."),
+    ("Matthew 11:28-30", "Come to me, all you who are weary and burdened, and I will give you rest. Take my yoke upon you and learn from me, for I am gentle and humble in heart, and you will find rest for your souls.", "Jesus, I come to you weary from the day. I release the burden of trying to do everything, be everywhere, please everyone. Your yoke is easy. Tonight I choose rest over productivity, peace over progress. There is always tomorrow."),
+    ("Psalm 90:12", "Teach us to number our days, that we may gain a heart of wisdom.", "Lord, teach me to number my days wisely. Not to rush through them chasing the next milestone, but to be fully present in each one. Give me a heart of wisdom — to know what to pursue and what to release, what to build and what to let go."),
+    ("Romans 8:28", "And we know that in all things God works for the good of those who love him, who have been called according to his purpose.", "Father, even in the things that didn't go as planned today — the missed tasks, the difficult conversations, the moments of doubt — I trust that you are working all things together for good. Help me to see your hand in every detail."),
+    ("Psalm 127:1-2", "Unless the Lord builds the house, the builders labor in vain. In vain you rise early and stay up late, toiling for food to eat — for he grants sleep to those he loves.", "Lord, I surrender the illusion that staying up later or working harder is the answer. Unless you build this house — MentorMates, Daydreamers, my life — I labor in vain. Tonight, I receive the gift of sleep that you give to those you love."),
+    ("Proverbs 3:5-6", "Trust in the Lord with all your heart and lean not on your own understanding; in all your ways submit to him, and he will make your paths straight.", "Father, I don't fully understand where this path is leading — but I trust you. Straighten the road ahead. Show me the next step tomorrow morning, and give me the courage to take it without needing to see the whole staircase."),
+    ("Ecclesiastes 3:1", "There is a time for everything, and a season for every activity under the heavens.", "Lord, thank you for the reminder that this season — the building, the uncertainty, the growth — is exactly where I'm meant to be. Help me not to rush the process or wish I were in a different season. This is my time. Help me to be faithful in it."),
+    ("Psalm 46:10", "Be still, and know that I am God.", "Father, quiet the noise in my mind tonight. Still the comparison, the anxiety, the endless planning. You are God, and I am not. That is the most freeing truth I know. In the stillness, let me know you more deeply."),
+    ("2 Timothy 1:7", "For the Spirit God gave us does not make us timid, but gives us power, love and self-discipline.", "Lord, replace my fear with power — power to build boldly. Replace my insecurity with love — love for the people I serve. Replace my scattered energy with self-discipline — the kind that comes from your Spirit, not my willpower alone."),
+]
+idx = (day - 1) % len(verses)
+ref, verse, prayer = verses[idx]
+print(f"{ref}|||{verse}|||{prayer}")
+PYEOF
+)
+
+VERSE_REF=$(echo "$PRAYER_DATA" | python3 -c "import sys; print(sys.stdin.read().strip().split('|||')[0])")
+VERSE_TEXT=$(echo "$PRAYER_DATA" | python3 -c "import sys; print(sys.stdin.read().strip().split('|||')[1])")
+PRAYER_TEXT=$(echo "$PRAYER_DATA" | python3 -c "import sys; print(sys.stdin.read().strip().split('|||')[2])")
+
+# ---- Build Markdown ----
+cat > "$OUT_DIR/digest.md" << MARKDOWN_EOF
+# Evening Digest — $DISPLAY_DATE
+
+> $RHYTHM_NOTE
+
+$DAY_SUMMARY
+
+## Today ($CAL_COUNT events)
+
+$CAL_TODAY_MD
+
+## Email ($TOTAL_EMAILS new)
+
+$EMAIL_MD
+
+## Digital Hygiene
+
+$BROWSER_MD
+
+## Active Projects ($TASKS_COUNT tasks in progress)
+
+$TASKS_MD
+
+## Tomorrow — $TOMORROW_DISPLAY ($TOMORROW_COUNT events)
+
+$CAL_TOMORROW_MD
+
+## Evening Reflection
+
+- What was today's highlight?
+- Did I honor my purpose today?
+- What is tomorrow's ONE thing?
+
+## Evening Prayer — $VERSE_REF
+
+> "$VERSE_TEXT"
+
+$PRAYER_TEXT
+
+*In Jesus' name, Amen.*
+
+---
+*You are not behind. You are building something real. Go to sleep.*
+*Generated at $GEN_TIME*
+MARKDOWN_EOF
+
+# ---- Build HTML Email (Daydreamers design system) ----
+# Outer wrapper with gradient background (Daydreamers style: cobalt top-right, amber bottom-left)
+cat > "$OUT_DIR/email.html" << 'HTML_HEADER'
+<div style="font-family:'DM Sans',Arial,Helvetica,sans-serif;max-width:720px;margin:0 auto;background:#f5f2ed;background-image:radial-gradient(ellipse 60% 40% at 95% 5%, rgba(28,63,220,.06) 0%, transparent 100%), radial-gradient(ellipse 50% 35% at 5% 95%, rgba(217,119,6,.04) 0%, transparent 100%);border-radius:12px;overflow:hidden;">
+HTML_HEADER
+
+cat >> "$OUT_DIR/email.html" << HTML_HEADER2
+
+  <!-- Header — dark ink with cobalt glow -->
+  <div style="background:#0a0a0f;background-image:radial-gradient(ellipse 65% 50% at 18% 25%, rgba(28,63,220,.42) 0%, transparent 65%), radial-gradient(ellipse 40% 30% at 62% 10%, rgba(217,119,6,.16) 0%, transparent 55%);padding:36px 40px 32px 40px;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+      <svg viewBox="0 0 256 256" width="32" height="32" xmlns="http://www.w3.org/2000/svg">
+        <path fill="none" stroke="#4a6aff" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"
+          d="M166 82c-8-4-17-6-27-6c-32 0-58 26-58 58s26 58 58 58c26 0 48-17 55-41c-7 4-16 6-25 6c-26 0-46-20-46-46c0-12 4-22 11-29c7-7 20-7 32 0z"/>
+      </svg>
+      <span style="font-family:'DM Serif Display',Georgia,serif;font-size:26px;color:#f5f2ed;letter-spacing:-0.5px;">Evening Digest</span>
+    </div>
+    <div style="font-size:15px;color:#9a9088;margin-bottom:6px;">$DISPLAY_DATE</div>
+    <div style="font-size:13px;color:#4a6aff;font-weight:500;">$RHYTHM_NOTE</div>
+  </div>
+
+  <!-- Accent bar — cobalt gradient -->
+  <div style="height:3px;background:linear-gradient(90deg, #1c3fdc, #4a6aff, #d97706);"></div>
+
+  <div style="padding:36px 40px 32px 40px;">
+
+    <!-- Quick Stats -->
+    <table style="width:100%;border-collapse:collapse;margin-bottom:36px;">
+      <tr>
+        <td style="text-align:center;padding:20px 16px;background:#ffffff;border-radius:10px 0 0 10px;border-right:1px solid #e8e3da;">
+          <div style="font-family:'DM Serif Display',Georgia,serif;font-size:32px;color:#1c3fdc;">$CAL_COUNT</div>
+          <div style="font-size:11px;color:#9a9088;text-transform:uppercase;letter-spacing:1.2px;margin-top:6px;">Events</div>
+        </td>
+        <td style="text-align:center;padding:20px 16px;background:#ffffff;border-right:1px solid #e8e3da;">
+          <div style="font-family:'DM Serif Display',Georgia,serif;font-size:32px;color:#1c3fdc;">$TOTAL_EMAILS</div>
+          <div style="font-size:11px;color:#9a9088;text-transform:uppercase;letter-spacing:1.2px;margin-top:6px;">Emails</div>
+        </td>
+        <td style="text-align:center;padding:20px 16px;background:#ffffff;border-radius:0 10px 10px 0;">
+          <div style="font-family:'DM Serif Display',Georgia,serif;font-size:32px;color:#1c3fdc;">$TASKS_COUNT</div>
+          <div style="font-size:11px;color:#9a9088;text-transform:uppercase;letter-spacing:1.2px;margin-top:6px;">Tasks</div>
+        </td>
+      </tr>
+    </table>
+
+    <!-- Day Summary -->
+    <div style="margin-bottom:36px;padding:20px 24px;background:rgba(28,63,220,.04);border-radius:10px;border-left:3px solid #4a6aff;">
+      <p style="font-size:15px;color:#0a0a0f;margin:0;line-height:1.7;">$DAY_SUMMARY</p>
+    </div>
+
+    <!-- Today's Schedule -->
+    <div style="margin-bottom:36px;">
+      <div style="font-family:'DM Mono',monospace;font-size:11px;color:#9a9088;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:16px;">01 — Today's Schedule</div>
+      <div style="background:#ffffff;border-radius:10px;padding:24px;border:1.5px solid #e8e3da;">
+        $CAL_TODAY_HTML
+      </div>
+    </div>
+
+    <!-- Email -->
+    <div style="margin-bottom:36px;">
+      <div style="font-family:'DM Mono',monospace;font-size:11px;color:#9a9088;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:16px;">02 — Email Highlights</div>
+      <div style="background:#ffffff;border-radius:10px;padding:24px;border:1.5px solid #e8e3da;">
+        $EMAIL_HTML
+      </div>
+    </div>
+
+    <!-- Digital Hygiene -->
+    <div style="margin-bottom:36px;">
+      <div style="font-family:'DM Mono',monospace;font-size:11px;color:#9a9088;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:16px;">03 — Digital Hygiene</div>
+      <div style="background:#ffffff;border-radius:10px;padding:24px;border:1.5px solid #e8e3da;">
+        $BROWSER_HTML
+      </div>
+    </div>
+
+    <!-- Active Projects -->
+    <div style="margin-bottom:36px;">
+      <div style="font-family:'DM Mono',monospace;font-size:11px;color:#9a9088;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:16px;">04 — Active Projects</div>
+      <div style="background:#ffffff;border-radius:10px;padding:24px;border:1.5px solid #e8e3da;">
+        $TASKS_HTML
+      </div>
+    </div>
+
+    <!-- Tomorrow Look-Ahead -->
+    <div style="margin-bottom:36px;">
+      <div style="font-family:'DM Mono',monospace;font-size:11px;color:#9a9088;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:16px;">05 — Tomorrow: $TOMORROW_DISPLAY</div>
+      <div style="background:#ffffff;border-radius:10px;padding:24px;border:1.5px solid #e8e3da;">
+        $CAL_TOMORROW_HTML
+      </div>
+    </div>
+
+    <!-- Evening Reflection -->
+    <div style="margin-bottom:36px;">
+      <div style="font-family:'DM Mono',monospace;font-size:11px;color:#9a9088;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:16px;">06 — Evening Reflection</div>
+      <div style="background:#0a0a0f;background-image:radial-gradient(ellipse 65% 50% at 18% 25%, rgba(28,63,220,.28) 0%, transparent 65%), radial-gradient(ellipse 40% 30% at 62% 10%, rgba(217,119,6,.10) 0%, transparent 55%);border-radius:10px;padding:32px;">
+        <p style="font-family:'DM Serif Display',Georgia,serif;font-size:20px;color:#f5f2ed;margin:0 0 24px 0;line-height:1.5;">What was today's highlight?</p>
+        <p style="font-family:'DM Serif Display',Georgia,serif;font-size:20px;color:#f5f2ed;margin:0 0 24px 0;line-height:1.5;">Did I honor my purpose today?</p>
+        <p style="font-family:'DM Serif Display',Georgia,serif;font-size:20px;color:#f5f2ed;margin:0 0 24px 0;line-height:1.5;">What is tomorrow's ONE thing?</p>
+        <div style="border-top:1px solid rgba(74,106,255,.3);padding-top:20px;margin-top:8px;">
+          <p style="font-size:14px;color:#4a6aff;margin:0;line-height:1.6;font-style:italic;">"Everything that matters is captured. Tomorrow's highlight will become clear in the morning, after devotional."</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Evening Prayer -->
+    <div style="margin-bottom:36px;">
+      <div style="font-family:'DM Mono',monospace;font-size:11px;color:#9a9088;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:16px;">07 — Evening Prayer</div>
+      <div style="background:#ffffff;border-radius:10px;padding:32px;border:1.5px solid #e8e3da;border-left:4px solid #1c3fdc;">
+        <p style="font-family:'DM Serif Display',Georgia,serif;font-size:18px;color:#1c3fdc;margin:0 0 8px 0;line-height:1.4;">$VERSE_REF</p>
+        <p style="font-family:'DM Serif Display',Georgia,serif;font-size:16px;color:#0a0a0f;margin:0 0 24px 0;line-height:1.6;font-style:italic;">"$VERSE_TEXT"</p>
+        <div style="border-top:1px solid #e8e3da;padding-top:20px;">
+          <p style="font-size:14px;color:#0a0a0f;margin:0;line-height:1.7;">$PRAYER_TEXT</p>
+          <p style="font-size:14px;color:#9a9088;margin:16px 0 0 0;font-style:italic;">In Jesus' name, Amen.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Closing -->
+    <div style="text-align:center;padding:24px 0 8px 0;border-top:1px solid #d0c9be;">
+      <p style="font-family:'DM Serif Display',Georgia,serif;font-size:16px;color:#0a0a0f;margin:0 0 8px 0;line-height:1.5;">You are not behind. You are building something real.</p>
+      <p style="font-family:'DM Serif Display',Georgia,serif;font-size:15px;color:#9a9088;margin:0 0 20px 0;font-style:italic;">Go to sleep.</p>
+      <p style="font-size:11px;color:#d0c9be;margin:0;">Generated at $GEN_TIME</p>
+    </div>
+
+  </div>
+</div>
+HTML_HEADER2
+
+# ---- Save preview copy ----
+cp "$OUT_DIR/email.html" /tmp/digest-preview.html 2>/dev/null || true
+
+# ---- Output: Terminal ----
+cat "$OUT_DIR/digest.md"
+
+# ---- Output: Obsidian ----
+if [ "$SKIP_OBSIDIAN" = false ]; then
+  OBSIDIAN_FILE="$OBSIDIAN_VAULT/Daily Notes/$OBSIDIAN_DATE.md"
+  if [ -f "$OBSIDIAN_FILE" ]; then
+    echo "" >> "$OBSIDIAN_FILE"
+    echo "---" >> "$OBSIDIAN_FILE"
+    echo "" >> "$OBSIDIAN_FILE"
+    cat "$OUT_DIR/digest.md" >> "$OBSIDIAN_FILE"
+    echo "[Obsidian] Appended to: $OBSIDIAN_FILE"
+  else
+    cat "$OUT_DIR/digest.md" > "$OBSIDIAN_FILE"
+    echo "[Obsidian] Created: $OBSIDIAN_FILE"
+  fi
+fi
+
+# ---- Output: Notion ----
+if [ "$SKIP_NOTION" = false ] && [ "$DRY_RUN" = false ]; then
+  echo "[Notion] Creating digest page..."
+  MEETINGS_DB="255ab088-064e-800e-b27d-f9bf93741625"
+  cd /Users/china/codeDev/notion-management && bash -c "
+    source bin/notion-config.sh
+    BODY='{\"parent\":{\"database_id\":\"$MEETINGS_DB\"},\"properties\":{\"Name\":{\"title\":[{\"text\":{\"content\":\"Evening Digest — $DISPLAY_DATE\"}}]},\"Event Type\":{\"select\":{\"name\":\"Daily Standup\"}},\"Event Date\":{\"date\":{\"start\":\"$DATE\"}}}}'
+    RESULT=\$(notion_request POST '/pages' \"\$BODY\")
+    PAGE_ID=\$(echo \"\$RESULT\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"id\"])' 2>/dev/null || echo '')
+    if [ -n \"\$PAGE_ID\" ]; then
+      echo \"  Created page: \$PAGE_ID\"
+    else
+      echo '  Failed to create page'
+    fi
+  " 2>/dev/null || echo "  [Notion] Failed"
+fi
+
+# ---- Output: Email ----
+if [ "$SKIP_EMAIL" = false ] && [ "$DRY_RUN" = false ]; then
+  echo "[Email] Sending digest to $PERSONAL..."
+  EMAIL_BODY_HTML=$(cat "$OUT_DIR/email.html")
+  gog gmail send \
+    --to "$PERSONAL" \
+    --subject "Evening Digest — $DISPLAY_DATE" \
+    --body-html "$EMAIL_BODY_HTML" \
+    --account "$PERSONAL" \
+    --force 2>/dev/null && echo "  Sent!" || echo "  Failed to send"
+fi
+
+echo ""
+echo "=== Done ==="

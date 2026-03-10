@@ -1,0 +1,16 @@
+# Tokens and credentials
+tokens/
+*.json.bak
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# Temp
+/tmp/
+*.tmp
