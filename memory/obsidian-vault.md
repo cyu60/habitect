@@ -1,7 +1,7 @@
 # Obsidian Vault Details
 
 ## Location & Repo
-- **Vault path:** `/Users/china/Desktop/Roam2Obsidian transition/Roam-Export-1683384736080/`
+- **Vault path:** `/Users/china/Desktop/Obsidian/Chinat's Notes/`
 - **GitHub repo:** `https://github.com/cyu60/obsidian-vault` (account: cyu60, branch: main)
 - **Origin:** Roam Research export, migrated to Obsidian
 

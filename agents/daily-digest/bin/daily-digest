@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NOTION_BIN="/Users/china/codeDev/notion-management/bin"
 BROWSER_BIN="/Users/china/.claude/skills/browser-history/bin"
-OBSIDIAN_VAULT="/Users/china/Desktop/Roam2Obsidian transition/Roam-Export-1683384736080"
+OBSIDIAN_VAULT="/Users/china/Desktop/Obsidian/Chinat's Notes"
 
 PERSONAL="chinatchinat123@gmail.com"
 STANFORD="chinat@stanford.edu"
@@ -633,7 +633,7 @@ RULES:
 try:
     client = anthropic.Anthropic()
     response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model="claude-sonnet-4-6",
         max_tokens=1500,
         system=system_prompt,
         messages=[{"role": "user", "content": f"Write the evening digest for this data:\n{data_context}"}]

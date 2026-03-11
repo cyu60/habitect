@@ -8,6 +8,7 @@ All managed via system crontab (`crontab -e` to edit, `crontab -l` to list).
 |-----|----------|--------|-----|-------|
 | Tech Weekly Agenda | Fri 10:03am | `/Users/china/codeDev/notion-management/bin/tech-agenda` | `/tmp/tech-agenda.log` | 2026-03-09 |
 | Marketing Agenda | Sun 10:03am | `/Users/china/codeDev/notion-management/bin/marketing-agenda` | `/tmp/marketing-agenda.log` | 2026-03-09 |
+| Apple Notes Sync | Daily 11:00pm | `/Users/china/codeDev/apple-notes-backup/bin/sync` | `apple-notes-backup/logs/` | 2026-03-10 |
 
 ## What Each Job Does
 
@@ -23,6 +24,14 @@ All managed via system crontab (`crontab -e` to edit, `crontab -l` to list).
 - Creates Notion page with agenda sections
 - Emails: Josie, Britney, Catherine, Leah, Chinat
 - Flags: `--dry-run`, `--no-email`, `--no-notion`, `--date YYYY-MM-DD`
+
+### Apple Notes Sync (Daily at 11 PM)
+- Exports all Apple Notes to markdown files organized by folder
+- Commits changes to git with stats (new/modified/deleted)
+- Pushes to `github.com/cyu60/apple-notes-backup` (private)
+- Managed via launchd: `com.chinat.apple-notes-sync`
+- Manual run: `/Users/china/codeDev/apple-notes-backup/bin/sync`
+- Flags: `--no-push`, `--force`
 
 ## Management Commands
 

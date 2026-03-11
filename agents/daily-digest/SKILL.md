@@ -60,7 +60,7 @@ Runs daily at 9 PM PT:
 ## Key Paths
 
 - Script: `/Users/china/.claude/skills/daily-digest/bin/daily-digest`
-- Obsidian vault: `/Users/china/Desktop/Roam2Obsidian transition/Roam-Export-1683384736080/Daily Notes/`
+- Obsidian vault: `/Users/china/Desktop/Obsidian/Chinat's Notes/Daily Notes/`
 - Notion Meetings DB: `255ab088-064e-800e-b27d-f9bf93741625`
 - Email recipient: chinatchinat123@gmail.com
 - Uses `gog` CLI for Gmail/Calendar (not gsuite-tools)

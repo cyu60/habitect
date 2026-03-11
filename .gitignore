@@ -14,3 +14,7 @@ node_modules/
 # Temp
 /tmp/
 *.tmp
+data/
+.playwright-linkedin-session/
+snapshots/
+.claude/
