@@ -30,3 +30,17 @@ Downloads are saved to `data/linkedin/`.
 6. Return to the same page and click **"Download"**
 
 The download is a `.zip` containing CSVs (connections, messages, profile, skills, endorsements, etc.).
+
+## Import Into Habitect
+
+After you have the export zip, normalize the relationship data and add it to Habitect:
+
+```bash
+python3 scripts/import-linkedin-export.py ~/Downloads/Complete_LinkedInDataExport_03-12-2026.zip.zip
+```
+
+Outputs:
+- Raw snapshot under `data/linkedin/raw/<date>/` (local only, gitignored)
+- Normalized relationship tables under `data/processed/` (local only, gitignored)
+- Private detail report under `data/processed/` (local only, gitignored)
+- Public-safe knowledge summary at `knowledge/people/linkedin.md`

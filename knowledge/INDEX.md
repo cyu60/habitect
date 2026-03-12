@@ -92,6 +92,7 @@
 | Speaking decks | Google Drive → `Presentations/` | `gog drive` |
 | Awards | Google Drive → `Career/Awards/` | `gog drive` |
 | Network/advisors | Habitect `knowledge/people/team.md` | Read file |
+| LinkedIn relationship graph + connection export | Habitect `knowledge/people/linkedin.md` + `data/processed/linkedin-connections-*.csv` + `data/linkedin/raw/` | Read files |
 | Skills inventory | Habitect `knowledge/skills/` | Read files |
 | Employment docs | Google Drive → `Career/Employment documents/` | `gog drive` |
 

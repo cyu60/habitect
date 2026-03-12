@@ -20,6 +20,7 @@ knowledge/
 ├── people/                 # Relationships and contacts
 │   ├── team.md             # Core team members
 │   ├── network.md          # Advisors, partners, investors
+│   ├── linkedin.md         # LinkedIn network summary (aggregate, public-safe)
 │   └── contacts.md         # Key contacts directory
 ├── resources/              # Access to tools, accounts, infrastructure
 │   ├── repos.md            # All GitHub repos and local paths

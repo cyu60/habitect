@@ -2,6 +2,7 @@
 
 > Source of truth for professional network. Synced to Notion People DB (`24eab088-064e-8029-b0f5-c57106224024`).
 > Last synced: 2026-03-10
+> LinkedIn aggregate network snapshot lives in `knowledge/people/linkedin.md`; raw relationship exports stay in local `data/`.
 
 ## By Organization
 
