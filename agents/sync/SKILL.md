@@ -1,3 +1,14 @@
+---
+name: sync
+description: Keep Notion tasks, Obsidian daily notes, Apple Notes todos, and Apple Calendar events in sync via the habitect-sync CLI.
+argument-hint: "[--status] [--dry-run] [--add \"task\"]"
+allowed-tools:
+  - Bash(habitect-sync *)
+  - Bash(/opt/homebrew/bin/habitect-sync *)
+  - Read
+  - Grep
+---
+
 # Habitect Sync Agent
 
 Keeps Notion tasks, Obsidian daily notes, Apple Notes todos, and Apple Calendar events in sync.

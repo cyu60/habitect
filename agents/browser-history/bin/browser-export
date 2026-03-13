@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+"""
+browser-export — Export and analyze browser history from all available browsers.
+
+Usage:
+  browser-export recent [--limit N] [--browser BROWSER]     Show recent pages (default 30)
+  browser-export searches [--limit N] [--browser BROWSER]   Show recent search queries
+  browser-export domains [--limit N] [--days N]             Top domains by visit count
+  browser-export timeline [--days N]                        Activity timeline by hour
+  browser-export recap [--days N]                           Daily recap with categories
+  browser-export dump [--output FILE] [--browser BROWSER]   Full JSON export
+
+Options:
+  --limit N       Number of results (default 30)
+  --browser B     Filter: Chrome, Safari, Arc, Firefox, all (default: all)
+  --days N        Look back N days (default 7)
+  --output FILE   Output file for dump
+"""
+
+import sys
+import os
+import json
+import re
+import subprocess
+from datetime import datetime, timedelta
+from collections import Counter, defaultdict
+from urllib.parse import urlparse, parse_qs, unquote
+
+def get_history(browser="all", days=None):
+    """Get browser history using browser-history CLI."""
+    all_entries = []
+
+    # When "all", try each browser individually to avoid failures
+    if browser == "all":
+        browsers_to_try = ["Chrome", "Firefox", "Arc", "Safari"]
+    else:
+        browsers_to_try = [browser]
+
+    for b in browsers_to_try:
+        cmd = ["browser-history", "-b", b, "-f", "json"]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0 or not result.stdout.strip():
+                continue
+            data = json.loads(result.stdout)
+            entries = data.get("history", data if isinstance(data, list) else [])
+            all_entries.extend(entries)
+        except Exception:
+            continue
+
+    all_entries = dedupe_entries(all_entries)
+
+    if days:
+        cutoff = datetime.now().astimezone() - timedelta(days=days)
+        filtered = []
+        for e in all_entries:
+            try:
+                ts = datetime.fromisoformat(e["Timestamp"])
+                if ts >= cutoff:
+                    filtered.append(e)
+            except Exception:
+                filtered.append(e)
+        return filtered
+    return all_entries
+
+def dedupe_entries(entries):
+    """Remove duplicate URLs with same timestamp."""
+    seen = set()
+    deduped = []
+    for e in entries:
+        key = (e.get("Timestamp", "")[:19], e.get("URL", ""))
+        if key not in seen:
+            seen.add(key)
+            deduped.append(e)
+    return deduped
+
+def is_noise(url, title=""):
+    """Filter out auth, oauth, tracking, and other noise URLs."""
+    noise_patterns = [
+        "accounts.google.com", "oauth", "ServiceLogin", "duosecurity",
+        "storagerelay", "signin/challenge", "CheckCookie", "InteractiveLogin",
+        "gds.google.com", "SetOSID", "chrome-extension://",
+        "chrome://", "about:blank", "recoverysecurityoptions"
+    ]
+    return any(p in url for p in noise_patterns)
+
+def extract_search_query(url):
+    """Extract search query from Google/Bing/DuckDuckGo URLs."""
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+
+    if "google.com/search" in url:
+        return unquote(params.get("q", [""])[0])
+    if "bing.com/search" in url:
+        return unquote(params.get("q", [""])[0])
+    if "duckduckgo.com" in url:
+        return unquote(params.get("q", [""])[0])
+    return None
+
+def categorize_url(url, title=""):
+    """Categorize a URL into activity buckets."""
+    url_lower = url.lower()
+    title_lower = (title or "").lower()
+
+    categories = {
+        "Social Media": ["twitter.com", "x.com", "facebook.com", "instagram.com", "reddit.com", "linkedin.com", "threads.net"],
+        "Video/Entertainment": ["youtube.com", "netflix.com", "twitch.tv", "spotify.com", "music.apple"],
+        "Email/Communication": ["mail.google.com", "gmail", "outlook", "slack.com", "discord.com", "messages.google"],
+        "Development": ["github.com", "stackoverflow.com", "localhost", "vercel.com", "supabase", "npm", "docs.anthropic"],
+        "AI Tools": ["claude.ai", "chat.openai.com", "chatgpt.com", "copilot", "cursor.com", "lovable.dev", "v0.dev", "bolt.new"],
+        "Productivity": ["notion.so", "todoist.com", "calendar.google", "docs.google", "sheets.google", "figma.com", "luma.com"],
+        "News/Reading": ["news.ycombinator.com", "techcrunch.com", "medium.com", "substack.com", "arxiv.org"],
+        "Shopping/Finance": ["amazon.com", "stripe.com", "name.com", "checkout", "payment"],
+        "Learning": ["coursera.org", "edx.org", "stanford.edu", "khan", "freecodecamp", "udemy"],
+        "Search": ["google.com/search", "bing.com/search", "duckduckgo.com"],
+    }
+
+    for category, patterns in categories.items():
+        if any(p in url_lower or p in title_lower for p in patterns):
+            return category
+    return "Other"
+
+def cmd_recent(args):
+    limit = int(args.get("--limit", 30))
+    browser = args.get("--browser", "all")
+    entries = get_history(browser)
+
+    filtered = [e for e in entries if not is_noise(e["URL"], e.get("Title", ""))]
+    filtered.sort(key=lambda x: x["Timestamp"], reverse=True)
+
+    print(f"Recent {min(limit, len(filtered))} pages ({len(entries)} total entries):\n")
+    for e in filtered[:limit]:
+        ts = e["Timestamp"][:19].replace("T", " ")
+        title = (e.get("Title") or "")[:65]
+        domain = urlparse(e["URL"]).netloc[:40]
+        print(f"  {ts}  [{domain}]")
+        print(f"    {title}")
+        print()
+
+def cmd_searches(args):
+    limit = int(args.get("--limit", 30))
+    browser = args.get("--browser", "all")
+    entries = get_history(browser)
+
+    searches = []
+    for e in entries:
+        q = extract_search_query(e["URL"])
+        if q:
+            searches.append({"query": q, "timestamp": e["Timestamp"]})
+
+    searches.sort(key=lambda x: x["timestamp"], reverse=True)
+    seen = set()
+    unique = []
+    for s in searches:
+        if s["query"] not in seen:
+            seen.add(s["query"])
+            unique.append(s)
+
+    print(f"Recent searches ({len(unique)} unique):\n")
+    for s in unique[:limit]:
+        ts = s["timestamp"][:19].replace("T", " ")
+        print(f"  {ts}  {s['query']}")
+
+def cmd_domains(args):
+    limit = int(args.get("--limit", 20))
+    days = int(args.get("--days", 7))
+    entries = get_history(days=days)
+
+    filtered = [e for e in entries if not is_noise(e["URL"])]
+    domain_counts = Counter()
+    for e in filtered:
+        domain = urlparse(e["URL"]).netloc
+        if domain:
+            # Simplify domain
+            domain = re.sub(r"^www\.", "", domain)
+            domain_counts[domain] += 1
+
+    print(f"Top {limit} domains (last {days} days, {len(filtered)} visits):\n")
+    for domain, count in domain_counts.most_common(limit):
+        bar = "█" * min(count, 40)
+        print(f"  {count:4d}  {domain:<40s} {bar}")
+
+def cmd_timeline(args):
+    days = int(args.get("--days", 7))
+    entries = get_history(days=days)
+    filtered = [e for e in entries if not is_noise(e["URL"])]
+
+    hour_counts = Counter()
+    for e in filtered:
+        try:
+            ts = datetime.fromisoformat(e["Timestamp"])
+            hour_counts[ts.hour] += 1
+        except Exception:
+            pass
+
+    print(f"Activity by hour (last {days} days):\n")
+    max_count = max(hour_counts.values()) if hour_counts else 1
+    for h in range(24):
+        count = hour_counts.get(h, 0)
+        bar_len = int(40 * count / max_count) if max_count else 0
+        bar = "█" * bar_len
+        label = f"{h:02d}:00"
+        print(f"  {label}  {count:4d}  {bar}")
+
+def cmd_recap(args):
+    days = int(args.get("--days", 7))
+    entries = get_history(days=days)
+    filtered = [e for e in entries if not is_noise(e["URL"])]
+    filtered.sort(key=lambda x: x["Timestamp"])
+
+    # Group by date
+    by_date = defaultdict(list)
+    for e in filtered:
+        date = e["Timestamp"][:10]
+        by_date[date].append(e)
+
+    # Category stats
+    cat_counts = Counter()
+    for e in filtered:
+        cat = categorize_url(e["URL"], e.get("Title", ""))
+        cat_counts[cat] += 1
+
+    total = len(filtered)
+    print(f"=== Browser Recap (last {days} days) ===\n")
+    print(f"Total page visits: {total}")
+    print(f"Active days: {len(by_date)}")
+    if by_date:
+        avg = total / len(by_date)
+        print(f"Avg visits/day: {avg:.0f}")
+    print()
+
+    # Category breakdown
+    print("Category breakdown:")
+    for cat, count in cat_counts.most_common():
+        pct = 100 * count / total if total else 0
+        bar = "█" * int(pct / 2)
+        print(f"  {cat:<25s} {count:4d} ({pct:4.1f}%) {bar}")
+    print()
+
+    # Daily summary
+    print("Daily summary:")
+    for date in sorted(by_date.keys(), reverse=True):
+        day_entries = by_date[date]
+        day_cats = Counter()
+        day_searches = []
+        for e in day_entries:
+            day_cats[categorize_url(e["URL"], e.get("Title", ""))] += 1
+            q = extract_search_query(e["URL"])
+            if q:
+                day_searches.append(q)
+
+        top_cats = ", ".join(f"{c}" for c, _ in day_cats.most_common(3))
+        print(f"\n  {date} ({len(day_entries)} visits)")
+        print(f"    Top: {top_cats}")
+        if day_searches:
+            unique_searches = list(dict.fromkeys(day_searches))[:5]
+            print(f"    Searched: {'; '.join(unique_searches)}")
+
+        # Notable sites
+        notable = set()
+        for e in day_entries:
+            domain = re.sub(r"^www\.", "", urlparse(e["URL"]).netloc)
+            title = e.get("Title", "")
+            if domain and not is_noise(e["URL"]) and domain not in notable:
+                notable.add(domain)
+        top_domains = list(notable)[:8]
+        if top_domains:
+            print(f"    Sites: {', '.join(top_domains)}")
+
+    # Digital hygiene signals
+    print("\n=== Digital Hygiene Signals ===")
+    social_pct = 100 * cat_counts.get("Social Media", 0) / total if total else 0
+    video_pct = 100 * cat_counts.get("Video/Entertainment", 0) / total if total else 0
+    dev_pct = 100 * (cat_counts.get("Development", 0) + cat_counts.get("AI Tools", 0)) / total if total else 0
+    prod_pct = 100 * cat_counts.get("Productivity", 0) / total if total else 0
+
+    print(f"  Productive (Dev + AI + Productivity): {dev_pct + prod_pct:.1f}%")
+    print(f"  Social Media: {social_pct:.1f}%", end="")
+    if social_pct > 20:
+        print(" ⚠️  High")
+    elif social_pct > 10:
+        print(" — Moderate")
+    else:
+        print(" ✓ Low")
+
+    print(f"  Video/Entertainment: {video_pct:.1f}%", end="")
+    if video_pct > 20:
+        print(" ⚠️  High — check YouTube rabbit holes")
+    elif video_pct > 10:
+        print(" — Moderate")
+    else:
+        print(" ✓ Low")
+
+    # Late night activity
+    late_night = sum(1 for e in filtered
+                     if not is_noise(e["URL"]) and
+                     datetime.fromisoformat(e["Timestamp"]).hour >= 23)
+    if late_night > 0:
+        print(f"  Late night (11PM+): {late_night} visits ⚠️  Sleep covenant!")
+    else:
+        print(f"  Late night (11PM+): 0 visits ✓")
+
+def cmd_dump(args):
+    browser = args.get("--browser", "all")
+    output = args.get("--output", "/tmp/browser_history_export.json")
+    entries = get_history(browser)
+
+    with open(output, "w") as f:
+        json.dump({"history": entries, "exported": datetime.now().isoformat()}, f, indent=2)
+    print(f"Exported {len(entries)} entries to {output}")
+
+def parse_args(argv):
+    args = {}
+    i = 0
+    while i < len(argv):
+        if argv[i].startswith("--"):
+            key = argv[i]
+            if i + 1 < len(argv) and not argv[i+1].startswith("--"):
+                args[key] = argv[i+1]
+                i += 2
+            else:
+                args[key] = True
+                i += 1
+        else:
+            i += 1
+    return args
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(0)
+
+    command = sys.argv[1]
+    args = parse_args(sys.argv[2:])
+
+    commands = {
+        "recent": cmd_recent,
+        "searches": cmd_searches,
+        "domains": cmd_domains,
+        "timeline": cmd_timeline,
+        "recap": cmd_recap,
+        "dump": cmd_dump,
+    }
+
+    if command in commands:
+        commands[command](args)
+    else:
+        print(f"Unknown command: {command}")
+        print(__doc__)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

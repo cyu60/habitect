@@ -1,3 +1,15 @@
+---
+name: daydreamers-content
+description: Generate LinkedIn posts and Substack newsletter drafts from DayDreamers session slides, including slide screenshots and Notion content-tracker entries. Use when the user asks to create DayDreamers social content, newsletter content, or posts from session materials.
+argument-hint: "generate posts for session <n> | create newsletter from session <n>"
+allowed-tools:
+  - Read
+  - Grep
+  - Bash(bun *)
+  - Bash(cd /Users/china/codeDev/daydreamers-materials && *)
+  - Bash(git -C /Users/china/codeDev/daydreamers-materials *)
+---
+
 # DayDreamers Content Generation
 
 Generate LinkedIn posts and Substack newsletter articles from DayDreamers session slides.

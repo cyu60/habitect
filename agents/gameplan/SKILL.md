@@ -14,6 +14,17 @@ allowed-tools:
 
 This skill generates a purpose-driven gameplan for tomorrow. It layers on top of `/daily-digest` by adding strategic context from Obsidian and Notion.
 
+## Planning Standard
+
+Tomorrow's plan should be the result of triage, not a copy of every open task.
+
+Before finalizing the plan:
+- reconcile Notion tasks with meeting-note promises, inbox follow-ups, and 750 words captures
+- reconcile recent Apple Notes TODOs and conversation notes
+- merge duplicates
+- mark blocked items as watcher items instead of active work
+- reduce tomorrow to a list that is actually executable
+
 ## How to Generate
 
 ### Step 1: Run daily-digest for today's data (if not already run)
@@ -69,7 +80,7 @@ Filter output for: Status = "Not started" or "In progress", highlight anything d
 /Users/china/.claude/skills/browser-history/bin/browser-export searches --days 1
 ```
 
-### Step 5: Claude Code conversation logs (TODAY'S ACTUAL WORK)
+### Step 5: Claude Code + Codex conversation logs (TODAY'S ACTUAL WORK)
 This is critical — the conversation logs reveal what Chinat actually worked on, asked about, and accomplished today.
 
 ```bash
@@ -98,13 +109,26 @@ Cross-reference conversation logs with:
 - Notion tasks (did any tasks get completed or progressed?)
 - Browser history (was browsing aligned with what was discussed in conversations?)
 
-**This is the most honest signal of what the day actually looked like.**
+Also review Codex session logs for the same day:
+
+```bash
+find ~/.codex/sessions ~/.codex/archived_sessions -name "*.jsonl" -mtime 0 2>/dev/null
+```
+
+Carry forward the digest's short `AI Session Summary`:
+- total sessions reviewed
+- `Claude Code` vs `Codex` split
+- main workstreams discussed
+
+**Claude Code + Codex together are the most honest signal of what the day actually looked like.**
 
 ### Step 6: Read Apple Notes for any captures
 ```bash
-osascript -e 'tell application "Notes" to get name of every note of folder "Notes" of default account' 2>/dev/null
+notes recent 20
+notes list "Todos & Gameplans"
+notes list "Conversations"
 ```
-Check for any notes created/modified today that contain task captures or quick thoughts.
+Then read any Apple Note modified today that contains task captures, conversation outcomes, or quick thoughts that need routing.
 
 ### Step 7: Synthesize into the report
 
@@ -157,6 +181,12 @@ Why: [connects to quarterly goal + purpose]
 - [overdue Notion tasks]
 - [items mentioned in daily note but not resolved]
 - [anything from quarterly plan that's slipping]
+
+### Triage Decisions
+- **Do tomorrow:** [short list only]
+- **Delegate / watch:** [owned by someone else; you are tracking]
+- **Defer:** [real but not tomorrow]
+- **Drop / archive:** [stale or duplicate items removed from active focus]
 
 ### Anchor Question
 > "Is what I am doing tomorrow striving toward a greater purpose — is it done according to the will of the Lord?"

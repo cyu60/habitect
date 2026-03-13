@@ -1,0 +1,4 @@
+interface:
+  display_name: "iMessage"
+  short_description: "Search and send iMessages from this Mac"
+  default_prompt: "Use local iMessage data or macOS Messages automation for this task."
